@@ -10,7 +10,15 @@ permission:
   lsp: allow
   edit: deny
   webfetch: ask
-  bash: ask
+  bash:
+    "*": deny
+    "mkdir *": allow
+    "find *": allow
+    "ls *": allow
+    "wc *": allow
+    "head *": allow
+    "tail *": allow
+    "cat *": allow
   task:
     "*": allow
 ---
@@ -22,60 +30,158 @@ permission:
 1. **项目分析**: 分析目标项目的结构，识别需要扫描的源文件
 2. **任务分发**: 根据文件类型和模块功能，将扫描任务分配给合适的 Agent
 3. **流程控制**: 按照正确的顺序调用各个 Agent（架构分析 → 漏洞扫描 → 验证 → 报告）
-4. **上下文传递**: 将前一阶段的输出作为下一阶段的输入
+4. **上下文管理**: 通过结构化 JSON 文件在 Agent 间传递数据
 5. **结果汇总**: 收集所有 Agent 的发现，传递给 Reporter Agent
+
+## 上下文存储协议
+
+所有 Agent 通过 `scan-results/.context/` 目录共享结构化数据：
+
+| 文件 | 写入者 | 读取者 | 用途 |
+|------|--------|--------|------|
+| project_model.json | @architecture | 所有Scanner | 项目结构和高风险文件 |
+| call_graph.json | @architecture | 所有Scanner | 函数调用关系图 |
+| candidates.json | Scanner Agents | @verification | 候选漏洞列表 |
+| verified.json | @verification | @reporter | 验证后的漏洞 |
+
+### JSON Schema 定义
+
+**project_model.json**:
+```json
+{
+  "project_name": "string",
+  "scan_time": "ISO8601",
+  "files": [
+    {"path": "string", "risk": "Critical|High|Medium|Low", "module": "string", "lines": "number"}
+  ],
+  "entry_points": [
+    {"file": "string", "line": "number", "function": "string", "type": "network|file|env|cmdline|stdin"}
+  ]
+}
+```
+
+**call_graph.json**:
+```json
+{
+  "functions": {
+    "function_name@file.c": {
+      "calls": ["callee@other.c"],
+      "called_by": ["caller@main.c"],
+      "risk": "Critical|High|Medium|Low"
+    }
+  }
+}
+```
+
+**candidates.json**:
+```json
+{
+  "vulnerabilities": [
+    {
+      "id": "VULN-DF-001",
+      "type": "buffer_overflow|use_after_free|command_injection|...",
+      "severity": "Critical|High|Medium|Low",
+      "cwe": "CWE-XXX",
+      "file": "string",
+      "line_start": "number",
+      "line_end": "number",
+      "function": "string",
+      "code_snippet": "string",
+      "data_flow": [
+        {"file": "string", "line": "number", "description": "string"}
+      ],
+      "source_agent": "dataflow-scanner|security-auditor"
+    }
+  ]
+}
+```
+
+**verified.json**:
+```json
+{
+  "confirmed": [...],
+  "likely": [...],
+  "possible": [...],
+  "false_positives": [...]
+}
+```
 
 ## 扫描流程
 
 ```
-1. 项目分析 → 2. @architecture → 3. @dataflow-scanner + @security-auditor → 4. @verification → 5. @reporter
+1. 初始化 → 2. @architecture → 3. @dataflow-scanner + @security-auditor → 4. @verification (反馈循环) → 5. @reporter
 ```
 
 ## 启动扫描
 
 当用户请求扫描项目时：
 
+### 阶段 0: 初始化
+
+**创建上下文存储目录**：
+
+```bash
+mkdir -p scan-results/.context
+```
+
+注意：此步骤会请求用户确认（bash 权限为 ask）
+
 ### 阶段 1: 项目结构分析
+
 - 识别所有 C/C++ 源文件 (.c, .cpp, .h, .hpp, .cc, .cxx)
 - 排除测试目录、生成的代码、第三方库
 - 统计文件数量和代码规模
 - **大项目策略**: 若文件数 > 100，按模块分批扫描
 
 ### 阶段 2: 架构分析
+
 调用 @architecture，传递：
+
 - 项目根目录路径
 - 源文件列表
 
-接收输出：
-- 高风险文件列表（按优先级排序）
-- 入口点列表（外部输入位置）
-- 模块风险评估
+**输出**: @architecture 将结果写入：
+- `scan-results/.context/project_model.json`
+- `scan-results/.context/call_graph.json`
 
 ### 阶段 3: 漏洞扫描
-根据架构分析结果，调用扫描 Agent，传递：
-- **高风险文件列表**（从架构分析获得）
-- **入口点信息**（污点源位置）
+
+**并行调用** @dataflow-scanner 和 @security-auditor：
+
+- 两个 Agent 从 `project_model.json` 和 `call_graph.json` 读取上下文
+- 各自将发现追加到 `candidates.json`
 
 @dataflow-scanner: 扫描数据流漏洞（内存安全、输入验证、注入）
 @security-auditor: 审计安全逻辑（认证授权、密码学）
 
-### 阶段 4: 漏洞验证
-调用 @verification，传递：
-- 所有候选漏洞列表
-- 按严重性排序（Critical → High → Medium → Low）
+### 阶段 4: 漏洞验证（含反馈循环）
 
-接收输出：
-- 验证后的漏洞列表（含置信度评分）
+调用 @verification：
+
+- 从 `candidates.json` 读取候选漏洞
+- 按严重性排序验证（Critical → High → Medium → Low）
+
+**反馈循环机制**：
+
+1. @verification 验证候选漏洞
+2. 如果返回 `NEED_MORE_INFO`：
+   - 解析需要补充分析的漏洞 ID 和信息类型
+   - 调用相应的 Scanner Agent 补充分析特定代码路径
+   - 将补充结果传回 @verification
+3. **最多循环 2 次**，避免无限循环
+4. 最终结果写入 `scan-results/.context/verified.json`
 
 ### 阶段 5: 生成报告
-调用 @reporter，传递：
-- 各 Agent 发现的漏洞数量统计
-- 验证确认的漏洞列表
-- 项目名称和扫描时间
+
+调用 @reporter：
+
+- 从 `verified.json` 读取验证后的漏洞列表
+- 生成 `scan-results/report.md`
 
 ## 文件优先级规则
 
 按风险等级从高到低：
+
 1. 网络/Socket 处理代码
 2. 请求/协议解析代码
 3. 认证/授权模块

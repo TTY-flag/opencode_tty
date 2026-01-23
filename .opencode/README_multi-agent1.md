@@ -82,11 +82,13 @@ opencode
 ### 4. 调用扫描
 
 在 OpenCode 中输入：
+
 ```
 @orchestrator 请扫描这个项目的安全漏洞
 ```
 
 或单独调用某个 Agent：
+
 ```
 @architecture 分析项目架构
 @dataflow-scanner 扫描内存安全问题
@@ -95,18 +97,19 @@ opencode
 
 ## Agent 说明
 
-| Agent | Mode | 职责 | 调用方式 |
-|-------|------|------|----------|
-| orchestrator | primary | 协调整个扫描流程 | Tab 切换或 @orchestrator |
-| architecture | subagent | 架构分析、威胁建模、跨文件调用图 | @architecture |
-| dataflow-scanner | subagent | 内存/输入/注入漏洞、跨文件追踪 | @dataflow-scanner |
-| security-auditor | subagent | 认证/密码学审计、跨文件安全逻辑 | @security-auditor |
-| verification | subagent | 漏洞验证、跨文件路径验证、降低误报 | @verification |
-| reporter | subagent | 生成 Markdown 扫描报告 | @reporter |
+| Agent            | Mode     | 职责                               | 调用方式                 |
+| ---------------- | -------- | ---------------------------------- | ------------------------ |
+| orchestrator     | primary  | 协调整个扫描流程                   | Tab 切换或 @orchestrator |
+| architecture     | subagent | 架构分析、威胁建模、跨文件调用图   | @architecture            |
+| dataflow-scanner | subagent | 内存/输入/注入漏洞、跨文件追踪     | @dataflow-scanner        |
+| security-auditor | subagent | 认证/密码学审计、跨文件安全逻辑    | @security-auditor        |
+| verification     | subagent | 漏洞验证、跨文件路径验证、降低误报 | @verification            |
+| reporter         | subagent | 生成 Markdown 扫描报告             | @reporter                |
 
 ## 检测能力
 
 ### 数据流漏洞 (DataFlowScanner)
+
 - 缓冲区溢出 (CWE-120, CWE-121, CWE-122)
 - Use-After-Free (CWE-416)
 - 双重释放 (CWE-415)
@@ -116,6 +119,7 @@ opencode
 - 格式化字符串 (CWE-134)
 
 ### 安全审计 (SecurityAuditor)
+
 - 硬编码凭证 (CWE-798)
 - 弱密码学 (CWE-327, CWE-328)
 - 不安全随机数 (CWE-338)
@@ -136,7 +140,9 @@ recv() [network.c]           ← 外部输入
 ```
 
 每个 Agent 都具备：
-- 函数调用追踪（grep 查找定义）
+
+- LSP 优先的符号解析（Go to Definition / Find References）
+- grep 作为 LSP 不可用时的回退
 - 至少 3 层调用链深度
 - 参数传递追踪
 - 全局变量跨文件使用检测
@@ -145,14 +151,15 @@ recv() [network.c]           ← 外部输入
 
 系统使用 0-100 的置信度评分来减少误报：
 
-| 分数 | 等级 | 处理方式 |
-|------|------|----------|
-| 80-100 | CONFIRMED | ✅ 报告 |
-| 60-79 | LIKELY | ✅ 报告 |
-| 40-59 | POSSIBLE | ⚠️ 低优先级报告 |
-| 0-39 | FALSE_POSITIVE | ❌ 不报告 |
+| 分数   | 等级           | 处理方式        |
+| ------ | -------------- | --------------- |
+| 80-100 | CONFIRMED      | ✅ 报告         |
+| 60-79  | LIKELY         | ✅ 报告         |
+| 40-59  | POSSIBLE       | ⚠️ 低优先级报告 |
+| 0-39   | FALSE_POSITIVE | ❌ 不报告       |
 
 评分因素：
+
 - 可达性（外部输入 +30 / 仅内部调用 +5）
 - 数据可控性（完全可控 +25 / 部分可控 +15）
 - 缓解措施（边界检查 -15 / 输入验证 -20）
@@ -162,28 +169,28 @@ recv() [network.c]           ← 外部输入
 
 生成的 `scan-results/report.md` 包含：
 
-1. **扫描统计**: 各 Agent 发现的漏洞数量
-2. **确认漏洞总数**: 经验证确认的漏洞数
-3. **漏洞详情**: 每个漏洞包含：
-   - 严重性和 CWE 编号
-   - 精确的文件路径和行号
-   - 实际代码片段
-   - 达成路径（跨文件调用链）
+1. **扫描摘要**: 漏洞统计表格 + Top 5 关键漏洞
+2. **攻击面分析**: 入口点和外部接口列表
+3. **漏洞详情**: 按严重性分组，每个漏洞包含代码片段和达成路径
 
 ## 项目结构
 
 ```
 your-project/
-├── opencode.json           # OpenCode 配置文件
 ├── .opencode/
-│   └── agents/             # Agent 定义
+│   └── agent/              # Agent 定义
 │       ├── orchestrator.md
 │       ├── architecture.md
 │       ├── dataflow-scanner.md
 │       ├── security-auditor.md
 │       ├── verification.md
 │       └── reporter.md
-└── scan-results/           # 扫描报告输出
+└── scan-results/           # 扫描输出（自动创建）
+    ├── .context/           # 结构化上下文（Agent 间通信）
+    │   ├── project_model.json
+    │   ├── call_graph.json
+    │   ├── candidates.json
+    │   └── verified.json
     └── report.md
 ```
 
