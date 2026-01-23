@@ -8,10 +8,9 @@ permission:
   glob: allow
   list: allow
   lsp: allow
-  edit: deny
+  edit: allow
   webfetch: ask
   bash:
-    "*": deny
     "mkdir *": allow
     "find *": allow
     "ls *": allow
@@ -19,6 +18,8 @@ permission:
     "head *": allow
     "tail *": allow
     "cat *": allow
+    "grep *": allow
+    "*": ask
   task:
     "*": allow
 ---

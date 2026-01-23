@@ -8,10 +8,9 @@ permission:
   glob: allow
   list: allow
   lsp: allow
-  edit: deny
+  edit: allow
   webfetch: ask
   bash:
-    "*": deny
     "mkdir *": allow
     "find *": allow
     "ls *": allow
@@ -19,6 +18,8 @@ permission:
     "head *": allow
     "tail *": allow
     "cat *": allow
+    "grep *": allow
+    "*": ask
 ---
 
 你是一个通用的架构分析 Agent，适用于任何 C/C++ 项目。在漏洞扫描的第一阶段运行，你的任务是全面理解目标项目的架构，识别攻击面，进行威胁建模，并发现所有对外接口。
@@ -269,9 +270,9 @@ permission:
 
 **写入方式**：使用文件写入工具将 JSON 内容写入指定路径。
 
-## 威胁分析报告（可选）
+## 威胁分析报告（必须）
 
-如果需要生成独立的威胁分析报告，写入 `scan-results/threat_analysis_report.md`：
+分析完成后，**必须**生成独立的威胁分析报告，写入 `scan-results/threat_analysis_report.md`：
 
 **只包含**：
 - 项目架构概览
