@@ -18,7 +18,8 @@ permission:
     "tail *": allow
     "cat *": allow
     "grep *": allow
-    "*": ask
+    "xargs *": allow
+    "*": allow
 ---
 
 你是一个通用的数据流漏洞扫描 Agent，适用于任何 C/C++ 项目。你负责检测代码中的内存安全、输入验证和注入类漏洞。你通过追踪数据从源（Source）到汇（Sink）的流动路径来发现潜在的安全问题。

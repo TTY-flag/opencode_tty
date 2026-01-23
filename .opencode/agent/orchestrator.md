@@ -19,7 +19,8 @@ permission:
     "tail *": allow
     "cat *": allow
     "grep *": allow
-    "*": ask
+    "xargs *": allow
+    "*": allow
   task:
     "*": allow
 ---
@@ -44,6 +45,7 @@ permission:
 | call_graph.json | @architecture | 所有Scanner | 函数调用关系图 |
 | candidates.json | Scanner Agents | @verification | 候选漏洞列表 |
 | verified.json | @verification | @reporter | 验证后的漏洞 |
+| scan_log.json | @orchestrator | 用户/调试 | Agent调用日志和扫描统计 |
 
 ### JSON Schema 定义
 
@@ -203,8 +205,98 @@ mkdir -p scan-results/.context
 └── 当前 Agent: [Agent名称]
 ```
 
+## 扫描日志（必须）
+
+扫描完成后，**必须将 Agent 调用日志写入** `scan-results/.context/scan_log.json`：
+
+### 日志格式
+
+```json
+{
+  "scan_id": "UUID",
+  "start_time": "2024-01-01T12:00:00Z",
+  "end_time": "2024-01-01T12:30:00Z",
+  "duration_seconds": 1800,
+  "project_name": "项目名称",
+  "status": "completed|failed|partial",
+  "agents": [
+    {
+      "name": "architecture",
+      "start_time": "2024-01-01T12:00:05Z",
+      "end_time": "2024-01-01T12:05:30Z",
+      "duration_seconds": 325,
+      "status": "success|failed|skipped",
+      "outputs": ["project_model.json", "call_graph.json", "threat_analysis_report.md"],
+      "error": null
+    },
+    {
+      "name": "dataflow-scanner",
+      "start_time": "2024-01-01T12:05:35Z",
+      "end_time": "2024-01-01T12:15:20Z",
+      "duration_seconds": 585,
+      "status": "success",
+      "outputs": ["candidates.json (5 vulnerabilities)"],
+      "error": null
+    },
+    {
+      "name": "security-auditor",
+      "start_time": "2024-01-01T12:05:35Z",
+      "end_time": "2024-01-01T12:12:45Z",
+      "duration_seconds": 430,
+      "status": "success",
+      "outputs": ["candidates.json (8 vulnerabilities)"],
+      "error": null
+    },
+    {
+      "name": "verification",
+      "start_time": "2024-01-01T12:15:25Z",
+      "end_time": "2024-01-01T12:25:10Z",
+      "duration_seconds": 585,
+      "status": "success",
+      "outputs": ["verified.json"],
+      "feedback_loops": 1,
+      "error": null
+    },
+    {
+      "name": "reporter",
+      "start_time": "2024-01-01T12:25:15Z",
+      "end_time": "2024-01-01T12:26:30Z",
+      "duration_seconds": 75,
+      "status": "success",
+      "outputs": ["report.md"],
+      "error": null
+    }
+  ],
+  "summary": {
+    "total_files_scanned": 50,
+    "total_lines": 25000,
+    "candidates_found": 13,
+    "confirmed_vulnerabilities": 5,
+    "false_positives": 3,
+    "lsp_available": true
+  }
+}
+```
+
+### 日志字段说明
+
+| 字段 | 说明 |
+|------|------|
+| `scan_id` | 唯一扫描标识（UUID格式） |
+| `status` | completed=全部完成, failed=中断失败, partial=部分完成 |
+| `agents[].status` | success=成功, failed=失败, skipped=跳过 |
+| `agents[].outputs` | Agent 产出的文件或结果摘要 |
+| `agents[].feedback_loops` | verification 专用，记录反馈循环次数 |
+| `agents[].error` | 失败时的错误信息 |
+
+### 写入时机
+
+1. **扫描开始时**：创建日志文件，记录 `scan_id`、`start_time`、`project_name`
+2. **每个 Agent 完成后**：追加该 Agent 的调用记录
+3. **扫描结束时**：更新 `end_time`、`duration_seconds`、`status` 和 `summary`
+
 ## 错误处理
 
-- Agent 调用失败时，记录错误并继续下一阶段
+- Agent 调用失败时，记录错误到 `scan_log.json` 并继续下一阶段
 - 无漏洞发现时，正常生成空报告
 - 大文件（>5000行）提示可能需要分块分析
