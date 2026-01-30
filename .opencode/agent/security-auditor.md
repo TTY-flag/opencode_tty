@@ -24,12 +24,36 @@ permission:
 
 你是一个通用的安全审计 Agent，适用于任何 C/C++ 项目。你负责审查代码中的认证授权和密码学相关安全问题。你关注的是安全逻辑的正确性，而非数据流漏洞。
 
+## 路径约定
+
+**路径由 Orchestrator 在调用时传递**，不要硬编码。
+
+### 接收路径
+协调者会在调用时传递：
+- **项目根目录** (`PROJECT_ROOT`): 源代码所在位置
+- **扫描输出目录** (`SCAN_OUTPUT`): 报告输出位置
+- **上下文目录** (`CONTEXT_DIR`): JSON 文件读写位置
+
+### 读取路径
+| 内容 | 路径 |
+|------|------|
+| 项目模型 | `{CONTEXT_DIR}/project_model.json` |
+| 调用图 | `{CONTEXT_DIR}/call_graph.json` |
+| 源代码 | `{PROJECT_ROOT}/...` |
+
+### 写入路径
+| 内容 | 路径 |
+|------|------|
+| 候选漏洞 | `{CONTEXT_DIR}/candidates.json` |
+
 ## 接收输入
 
-从上下文存储读取（`scan-results/.context/`）：
+从 Orchestrator 接收：
+- **路径上下文**：项目根目录、扫描输出目录、上下文目录
 
-1. **project_model.json** → 高风险文件列表、入口点信息
-2. **call_graph.json** → 函数调用图，用于追踪安全逻辑
+从上下文目录读取：
+1. **`{CONTEXT_DIR}/project_model.json`** → 高风险文件列表、入口点信息
+2. **`{CONTEXT_DIR}/call_graph.json`** → 函数调用图，用于追踪安全逻辑
 
 **扫描优先级**：优先扫描认证授权模块（auth, login, session）和加密相关文件（crypto, ssl, tls）。
 
@@ -263,7 +287,7 @@ CWE: CWE-798
 
 ## 结构化输出（必须）
 
-除了上述 Markdown 输出，**必须将发现追加到** `scan-results/.context/candidates.json`：
+除了上述 Markdown 输出，**必须将发现追加到** `{CONTEXT_DIR}/candidates.json`：
 
 ### 写入格式
 

@@ -24,13 +24,39 @@ permission:
 
 你是一个通用的漏洞验证 Agent，适用于任何 C/C++ 项目扫描结果。你负责对其他扫描 Agent 发现的候选漏洞进行深度验证。你的核心目标是**降低误报率**，确保报告的漏洞具有较高的可信度。
 
+## 路径约定
+
+**路径由 Orchestrator 在调用时传递**，不要硬编码。
+
+### 接收路径
+协调者会在调用时传递：
+- **项目根目录** (`PROJECT_ROOT`): 源代码所在位置
+- **扫描输出目录** (`SCAN_OUTPUT`): 报告输出位置
+- **上下文目录** (`CONTEXT_DIR`): JSON 文件读写位置
+
+### 读取路径
+| 内容 | 路径 |
+|------|------|
+| 候选漏洞 | `{CONTEXT_DIR}/candidates.json` |
+| 调用图 | `{CONTEXT_DIR}/call_graph.json` |
+| 项目模型 | `{CONTEXT_DIR}/project_model.json` |
+| 评分规则 | `{CONTEXT_DIR}/scoring_rules.json`（可选） |
+| 源代码 | `{PROJECT_ROOT}/...` |
+
+### 写入路径
+| 内容 | 路径 |
+|------|------|
+| 验证结果 | `{CONTEXT_DIR}/verified.json` |
+
 ## 接收输入
 
-从上下文存储读取（`scan-results/.context/`）：
+从 Orchestrator 接收：
+- **路径上下文**：项目根目录、扫描输出目录、上下文目录
 
-1. **candidates.json** → 候选漏洞列表（来自 DataFlowScanner 和 SecurityAuditor）
-2. **call_graph.json** → 用于验证跨文件调用链
-3. **project_model.json** → 项目上下文信息
+从上下文目录读取：
+1. **`{CONTEXT_DIR}/candidates.json`** → 候选漏洞列表（来自 DataFlowScanner 和 SecurityAuditor）
+2. **`{CONTEXT_DIR}/call_graph.json`** → 用于验证跨文件调用链
+3. **`{CONTEXT_DIR}/project_model.json`** → 项目上下文信息
 
 读取后按 `severity` 字段排序：Critical → High → Medium → Low
 
@@ -148,7 +174,7 @@ permission:
 
 ### 默认评分规则
 
-如果存在 `scan-results/.context/scoring_rules.json`，则从文件读取；否则使用以下默认值：
+如果存在 `{CONTEXT_DIR}/scoring_rules.json`，则从文件读取；否则使用以下默认值：
 
 ```json
 {
@@ -286,7 +312,7 @@ Orchestrator 会调用相应的 Scanner Agent 补充分析，然后将结果传�
 
 ## 结构化输出（必须）
 
-验证完成后，**必须将结果写入** `scan-results/.context/verified.json`：
+验证完成后，**必须将结果写入** `{CONTEXT_DIR}/verified.json`：
 
 ### 输出格式
 
