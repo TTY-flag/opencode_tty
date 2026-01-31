@@ -23,6 +23,8 @@ permission:
     "*": allow
   task:
     "*": allow
+  todowrite: allow
+  todoread: allow
 ---
 
 你是一个通用的 C/C++ 源码漏洞扫描系统协调者 Agent。你的职责是管理整个扫描流程，协调多个专业 Agent 的工作，确保扫描任务高效、有序地完成。

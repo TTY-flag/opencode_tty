@@ -22,6 +22,8 @@ permission:
     "*": allow
   task:
     "*": allow
+  todowrite: allow
+  todoread: allow
 ---
 
 你是一个数据流漏洞扫描的**协调者 Agent**。你负责按模块划分扫描任务，调度 `@dataflow-module-scanner` 子 Agent 进行分片扫描，最后汇总结果。

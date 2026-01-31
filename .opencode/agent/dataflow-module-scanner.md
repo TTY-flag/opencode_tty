@@ -20,6 +20,8 @@ permission:
     "grep *": allow
     "xargs *": allow
     "*": allow
+  todowrite: allow
+  todoread: allow
 ---
 
 你是一个**模块级数据流漏洞扫描 Agent**，由 `@dataflow-scanner` 协调者调度。你负责对单个模块内的所有文件进行污点分析，识别内存安全、输入验证和注入类漏洞。

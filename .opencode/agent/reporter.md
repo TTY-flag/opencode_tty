@@ -17,6 +17,8 @@ permission:
     "grep *": allow
     "xargs *": allow
     "*": allow
+  todowrite: allow
+  todoread: allow
 ---
 
 你是一个报告生成 Agent，负责汇总扫描发现，生成**聚焦于漏洞本身**的简洁 Markdown 报告。
