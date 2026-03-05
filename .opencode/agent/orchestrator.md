@@ -81,7 +81,8 @@ permission:
 |------|--------|--------|------|
 | project_model.json | @architecture | 所有Scanner | 项目结构和高风险文件 |
 | call_graph.json | @architecture | 所有Scanner | 函数调用关系图 |
-| candidates.json | Scanner Agents | @verification | 候选漏洞列表 |
+| candidates_df.json | @dataflow-scanner | @verification | 数据流候选漏洞列表 |
+| candidates_sec.json | @security-auditor | @verification | 安全审计候选漏洞列表 |
 | verified.json | @verification | @reporter | 验证后的漏洞 |
 | scan_log.json | @orchestrator | 用户/调试 | Agent调用日志和扫描统计 |
 
@@ -114,7 +115,7 @@ permission:
 }
 ```
 
-**candidates.json**:
+**candidates_df.json** (dataflow-scanner 写入) 和 **candidates_sec.json** (security-auditor 写入) 格式相同：
 ```json
 {
   "vulnerabilities": [
@@ -232,7 +233,8 @@ mkdir -p {CONTEXT_DIR}
 ```
 
 - 两个 Agent 从 `{CONTEXT_DIR}/project_model.json` 和 `{CONTEXT_DIR}/call_graph.json` 读取上下文
-- 各自将发现追加到 `{CONTEXT_DIR}/candidates.json`
+- dataflow-scanner 将发现写入 `{CONTEXT_DIR}/candidates_df.json`
+- security-auditor 将发现写入 `{CONTEXT_DIR}/candidates_sec.json`
 
 #### DataFlow Scanner 层级架构
 
@@ -251,7 +253,7 @@ mkdir -p {CONTEXT_DIR}
 2. 按风险优先级调度各模块的扫描
 3. 收集子 Agent 的模块内漏洞和跨模块数据流提示
 4. 执行跨模块数据流分析
-5. 合并所有结果到 `candidates.json`
+5. 合并所有结果到 `candidates_df.json`
 
 **优势**：解决大项目上下文爆炸问题，每个子 Agent 只处理一个模块。
 
@@ -271,7 +273,7 @@ mkdir -p {CONTEXT_DIR}
 验证候选漏洞，计算置信度评分
 ```
 
-- 从 `{CONTEXT_DIR}/candidates.json` 读取候选漏洞
+- 从 `{CONTEXT_DIR}/candidates_df.json` 和 `{CONTEXT_DIR}/candidates_sec.json` 读取候选漏洞并合并
 - 按严重性排序验证（Critical → High → Medium → Low）
 
 **反馈循环机制**：
@@ -358,7 +360,7 @@ mkdir -p {CONTEXT_DIR}
       "end_time": "2024-01-01T12:15:20Z",
       "duration_seconds": 585,
       "status": "success",
-      "outputs": ["candidates.json (5 vulnerabilities)"],
+      "outputs": ["candidates_df.json (5 vulnerabilities)"],
       "error": null
     },
     {
@@ -367,7 +369,7 @@ mkdir -p {CONTEXT_DIR}
       "end_time": "2024-01-01T12:12:45Z",
       "duration_seconds": 430,
       "status": "success",
-      "outputs": ["candidates.json (8 vulnerabilities)"],
+      "outputs": ["candidates_sec.json (8 vulnerabilities)"],
       "error": null
     },
     {

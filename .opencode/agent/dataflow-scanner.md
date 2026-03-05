@@ -48,7 +48,7 @@ permission:
 ### 写入路径
 | 内容 | 路径 |
 |------|------|
-| 候选漏洞 | `{CONTEXT_DIR}/candidates.json` |
+| 候选漏洞 | `{CONTEXT_DIR}/candidates_df.json` |
 
 ### 传递给子 Agent
 调用 `@dataflow-module-scanner` 时，**必须传递路径上下文**：
@@ -80,7 +80,7 @@ dataflow-scanner (协调者 - 你)
 2. **模块调度**: 为每个模块调用 `@dataflow-module-scanner`
 3. **结果收集**: 汇总各模块的候选漏洞
 4. **跨模块分析**: 分析模块间的数据流传递
-5. **输出合并**: 将所有发现写入 `candidates.json`
+5. **输出合并**: 将所有发现写入 `candidates_df.json`
 
 ## 接收输入
 
@@ -198,7 +198,7 @@ dataflow-scanner (协调者 - 你)
 
 ### 阶段 6: 合并输出
 
-将所有漏洞（模块内 + 跨模块）写入 `{CONTEXT_DIR}/candidates.json`：
+将所有漏洞（模块内 + 跨模块）写入 `{CONTEXT_DIR}/candidates_df.json`：
 
 ```json
 {

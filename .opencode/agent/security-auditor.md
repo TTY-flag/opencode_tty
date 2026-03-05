@@ -46,7 +46,7 @@ permission:
 ### 写入路径
 | 内容 | 路径 |
 |------|------|
-| 候选漏洞 | `{CONTEXT_DIR}/candidates.json` |
+| 候选漏洞 | `{CONTEXT_DIR}/candidates_sec.json` |
 
 ## 接收输入
 
@@ -289,7 +289,7 @@ CWE: CWE-798
 
 ## 结构化输出（必须）
 
-除了上述 Markdown 输出，**必须将发现追加到** `{CONTEXT_DIR}/candidates.json`：
+除了上述 Markdown 输出，**必须将发现写入** `{CONTEXT_DIR}/candidates_sec.json`：
 
 ### 写入格式
 
@@ -320,8 +320,7 @@ CWE: CWE-798
 
 ### 写入方式
 
-1. 读取现有 `candidates.json`（如果存在）
-2. 将新发现追加到 `vulnerabilities` 数组
-3. 写回文件
+1. 将所有发现的漏洞组织为 `vulnerabilities` 数组
+2. 写入 `{CONTEXT_DIR}/candidates_sec.json`（直接覆盖，无需合并）
 
-**注意**：与 dataflow-scanner 共享同一个 candidates.json 文件，ID 前缀使用 `VULN-SEC-` 以区分来源。
+**注意**：此文件仅由 security-auditor 写入，无并发冲突风险。

@@ -39,7 +39,8 @@ permission:
 ### 读取路径
 | 内容 | 路径 |
 |------|------|
-| 候选漏洞 | `{CONTEXT_DIR}/candidates.json` |
+| 候选漏洞(数据流) | `{CONTEXT_DIR}/candidates_df.json` |
+| 候选漏洞(安全审计) | `{CONTEXT_DIR}/candidates_sec.json` |
 | 调用图 | `{CONTEXT_DIR}/call_graph.json` |
 | 项目模型 | `{CONTEXT_DIR}/project_model.json` |
 | 评分规则 | `{CONTEXT_DIR}/scoring_rules.json`（可选） |
@@ -56,11 +57,12 @@ permission:
 - **路径上下文**：项目根目录、扫描输出目录、上下文目录
 
 从上下文目录读取：
-1. **`{CONTEXT_DIR}/candidates.json`** → 候选漏洞列表（来自 DataFlowScanner 和 SecurityAuditor）
-2. **`{CONTEXT_DIR}/call_graph.json`** → 用于验证跨文件调用链
-3. **`{CONTEXT_DIR}/project_model.json`** → 项目上下文信息
+1. **`{CONTEXT_DIR}/candidates_df.json`** → DataFlowScanner 发现的候选漏洞列表
+2. **`{CONTEXT_DIR}/candidates_sec.json`** → SecurityAuditor 发现的候选漏洞列表
+3. **`{CONTEXT_DIR}/call_graph.json`** → 用于验证跨文件调用链
+4. **`{CONTEXT_DIR}/project_model.json`** → 项目上下文信息
 
-读取后按 `severity` 字段排序：Critical → High → Medium → Low
+**合并步骤**：读取两个候选文件后，将 `candidates_df.json` 和 `candidates_sec.json` 中的 `vulnerabilities` 数组合并为一个统一列表，再按 `severity` 字段排序：Critical → High → Medium → Low
 
 ## 验证优先级
 
@@ -339,7 +341,7 @@ Orchestrator 会调用相应的 Scanner Agent 补充分析，然后将结果传�
         "mitigations": -10,
         "context": 0
       },
-      "original": { /* 来自 candidates.json 的原始漏洞数据 */ }
+      "original": { /* 来自 candidates_df.json 或 candidates_sec.json 的原始漏洞数据 */ }
     }
   ],
   "likely": [

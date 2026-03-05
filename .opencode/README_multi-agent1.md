@@ -44,7 +44,7 @@
 │ │  (模块1)      │ │               │               │
 │ ├───────────────┤ │               │ 输出:         │
 │ │ Module Scanner│ │               │ • candidates  │
-│ │  (模块2)      │ │               │   .json       │
+│ │  (模块2)      │ │               │   _sec.json   │
 │ ├───────────────┤ │               └───────┬───────┘
 │ │ Module Scanner│ │                       │
 │ │  (模块N)      │ │                       │
@@ -52,7 +52,7 @@
 │ + 跨模块数据流分析│                       │
 │                   │                       │
 │ 输出: candidates  │                       │
-│       .json       │                       │
+│       _df.json    │                       │
 └─────────┬─────────┘                       │
           │                                 │
           └─────────────────┬───────────────┘
@@ -64,7 +64,8 @@
               │   • 跨文件路径验证     │
               │   • 反馈循环 (最多2次) │
               │                       │
-              │   输入: candidates.json│
+              │   输入: candidates_df  │
+              │          +candidates_sec│
               │   输出: verified.json │
               └───────────┬───────────┘
                           ▲ │
@@ -122,13 +123,15 @@
 │  │             │ ◀──────────────────────             │               │  │
 │  └──────┬──────┘                                     │               │  │
 │         │                                            │               │  │
-│         │    candidates.json                         │               │  │
+│         │    candidates_sec.json                      │               │  │
 │         └────────────────────┬───────────────────────┘               │  │
+│                    (candidates_df.json)                              │  │
 │                              ▼                                       │  │
 │                    ┌─────────────────┐                               │  │
 │                    │  verification   │                               │  │
 │                    │                 │                               │  │
-│                    │ candidates.json │                               │  │
+│                    │ candidates_df + │                               │  │
+│                    │ candidates_sec  │                               │  │
 │                    │       ▼         │                               │  │
 │                    │ verified.json   │                               │  │
 │                    └────────┬────────┘                               │  │
@@ -152,10 +155,10 @@
 |-------|------|------|------|
 | **orchestrator** | 用户指令 | `scan_log.json` | 协调全流程，记录扫描日志 |
 | **architecture** | 源代码 | `project_model.json`<br>`call_graph.json`<br>`threat_analysis_report.md` | 架构分析、威胁建模 |
-| **dataflow-scanner** | `project_model.json`<br>`call_graph.json` | `candidates.json` | 协调模块扫描 + 跨模块分析 |
+| **dataflow-scanner** | `project_model.json`<br>`call_graph.json` | `candidates_df.json` | 协调模块扫描 + 跨模块分析 |
 | **dataflow-module-scanner** | 模块文件列表<br>调用图子集 | 模块内漏洞<br>跨模块数据流提示 | 单模块污点分析（子Agent） |
-| **security-auditor** | `project_model.json`<br>`call_graph.json` | `candidates.json` | 安全逻辑审计 |
-| **verification** | `candidates.json` | `verified.json` | 漏洞验证、置信度评分 |
+| **security-auditor** | `project_model.json`<br>`call_graph.json` | `candidates_sec.json` | 安全逻辑审计 |
+| **verification** | `candidates_df.json`<br>`candidates_sec.json` | `verified.json` | 漏洞验证、置信度评分 |
 | **reporter** | `verified.json`<br>`project_model.json` | `report.md` | 生成最终报告 |
 
 ## 核心特性
@@ -424,7 +427,8 @@ your-project/
     ├── .context/                   # 结构化上下文（Agent 间通信）
     │   ├── project_model.json      # 项目模型（architecture 输出）
     │   ├── call_graph.json         # 调用图（architecture 输出）
-    │   ├── candidates.json         # 候选漏洞（scanner 输出）
+    │   ├── candidates_df.json      # 数据流候选漏洞（dataflow-scanner 输出）
+    │   ├── candidates_sec.json     # 安全审计候选漏洞（security-auditor 输出）
     │   ├── verified.json           # 验证后漏洞（verification 输出）
     │   ├── scan_log.json           # 扫描日志（orchestrator 输出）
     │   └── scoring_rules.json      # 评分规则（可选，自定义置信度评分）
