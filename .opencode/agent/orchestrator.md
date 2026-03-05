@@ -257,14 +257,16 @@ mkdir -p {CONTEXT_DIR}
 **前置检查（必须通过，否则禁止进入本阶段）**：
 
 ```
-检查1: {CONTEXT_DIR}/project_model.json 存在且非空 → 通过/失败
-检查2: {CONTEXT_DIR}/call_graph.json    存在且非空 → 通过/失败
+检查1: {CONTEXT_DIR}/project_model.json            存在且非空 → 通过/失败
+检查2: {CONTEXT_DIR}/call_graph.json               存在且非空 → 通过/失败
+检查3: {SCAN_OUTPUT}/threat_analysis_report.md     存在且非空 → 通过/失败
 ```
 
-两项全部通过才代表 @architecture 已成功完成，**方可开始调用扫描 Agent**。若任意一项失败，报错并停止：
+三项全部通过才代表 @architecture 已成功完成，**方可开始调用扫描 Agent**。若任意一项失败，报错并停止：
 ```
 [错误] @architecture 输出不完整，禁止进入阶段 3。
-[建议] 请重新运行 @architecture，确认其完整写入输出文件后再继续。
+[缺失] 列出未生成的文件
+[建议] 请重新运行 @architecture，确认其完整写入全部输出文件后再继续。
 ```
 
 **并行调用** @dataflow-scanner 和 @security-auditor，**传递路径上下文**：
