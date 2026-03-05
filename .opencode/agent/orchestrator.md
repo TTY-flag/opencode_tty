@@ -151,19 +151,37 @@ permission:
 }
 ```
 
-## 扫描流程
+## 严格调用顺序（必须遵守）
+
+**绝对禁止跳过任何阶段或乱序调用。每个阶段必须在前一阶段成功完成后才能开始。**
 
 ```
-1. 初始化 → 2. @architecture → 3. @dataflow-scanner + @security-auditor → 4. @verification (反馈循环) → 5. @reporter
+阶段 0（初始化）
+    ↓ 必须：目录和文件全部创建成功
+阶段 1（项目结构分析）
+    ↓ 必须：识别到 C/C++ 源文件
+阶段 2（@architecture）
+    ↓ 必须：project_model.json 和 call_graph.json 写入成功
+阶段 3（@dataflow-scanner 和 @security-auditor 并行）
+    ↓ 必须：两个 Agent 均完成，candidates_df.json 和 candidates_sec.json 写入成功
+阶段 4（@verification）
+    ↓ 必须：verified.json 写入成功
+阶段 5（@reporter）
+    ↓ 完成：report.md 生成
 ```
+
+**阶段门控规则**：
+- 每个阶段开始前，检查上一阶段的输出文件是否存在且非空
+- 若检查失败，**停止流程并向用户报告具体原因**，不得跳过继续执行
+- 阶段 3 中两个 Agent 可并行，但必须**等待两者都完成**才能进入阶段 4
 
 ## 启动扫描
 
 当用户请求扫描项目时：
 
-### 阶段 0: 初始化
+### 阶段 0: 初始化（必须全部成功后才进入阶段 1）
 
-**1. 确定项目根目录**：
+**步骤 1：确定项目根目录**
 
 从用户提示词中提取目标项目的绝对路径，赋值给 `PROJECT_ROOT`。若用户未提供，**立即停止并询问路径，不得默认为当前工作目录**。
 
@@ -173,13 +191,31 @@ SCAN_OUTPUT = {PROJECT_ROOT}/scan-results
 CONTEXT_DIR = {SCAN_OUTPUT}/.context
 ```
 
-**2. 创建上下文存储目录**：
+验证 `PROJECT_ROOT` 是否存在且为目录；若不存在，报错并停止。
+
+**步骤 2：创建目录结构**
 
 ```bash
 mkdir -p {CONTEXT_DIR}
 ```
 
-**3. 记录路径**（后续所有调用都使用这些路径）
+创建完成后确认目录存在，否则报错并停止。
+
+**步骤 3：初始化上下文文件**
+
+在 `{CONTEXT_DIR}` 下创建以下占位文件（供子 Agent 写入前读取，避免文件不存在报错）：
+
+| 文件 | 初始内容 |
+|------|----------|
+| `candidates_df.json` | `{"vulnerabilities": []}` |
+| `candidates_sec.json` | `{"vulnerabilities": []}` |
+| `scan_log.json` | `{"scan_id": "<UUID>", "start_time": "<ISO8601>", "status": "running", "agents": []}` |
+
+写入完成后逐一确认文件存在，若任何文件创建失败，报错并停止。
+
+**步骤 4：记录路径**
+
+在后续所有阶段和子 Agent 调用中，始终使用步骤 1 确定的三个路径变量。
 
 ### 阶段 1: 项目结构分析
 
@@ -187,8 +223,11 @@ mkdir -p {CONTEXT_DIR}
 - 排除测试目录、生成的代码、第三方库
 - 统计文件数量和代码规模
 - **大项目策略**: 若文件数 > 100，按模块分批扫描
+- **门控**：若未找到任何 C/C++ 源文件，停止并提示用户确认路径
 
 ### 阶段 2: 架构分析
+
+**前置检查**：确认阶段 0 的所有初始化文件均已创建，否则回到阶段 0 重新执行。
 
 调用 @architecture，**传递路径上下文**：
 
@@ -209,7 +248,11 @@ mkdir -p {CONTEXT_DIR}
 - `{CONTEXT_DIR}/call_graph.json`
 - `{SCAN_OUTPUT}/threat_analysis_report.md`
 
+**门控**：@architecture 完成后，**必须确认** `{CONTEXT_DIR}/project_model.json` 和 `{CONTEXT_DIR}/call_graph.json` 均存在且非空，否则报错并停止，不得进入阶段 3。
+
 ### 阶段 3: 漏洞扫描
+
+**前置检查**：确认 `project_model.json` 和 `call_graph.json` 已就绪。
 
 **并行调用** @dataflow-scanner 和 @security-auditor，**传递路径上下文**：
 
@@ -241,6 +284,8 @@ mkdir -p {CONTEXT_DIR}
 - dataflow-scanner 将发现写入 `{CONTEXT_DIR}/candidates_df.json`
 - security-auditor 将发现写入 `{CONTEXT_DIR}/candidates_sec.json`
 
+**门控**：**必须等待两个 Agent 都完成**，再确认 `candidates_df.json` 和 `candidates_sec.json` 均已写入（文件存在），否则报错并停止，不得进入阶段 4。
+
 #### DataFlow Scanner 层级架构
 
 `@dataflow-scanner` 采用层级架构，按模块分片扫描：
@@ -263,6 +308,8 @@ mkdir -p {CONTEXT_DIR}
 **优势**：解决大项目上下文爆炸问题，每个子 Agent 只处理一个模块。
 
 ### 阶段 4: 漏洞验证（含反馈循环）
+
+**前置检查**：确认 `candidates_df.json` 和 `candidates_sec.json` 均已就绪。
 
 调用 @verification，**传递路径上下文**：
 
@@ -291,7 +338,11 @@ mkdir -p {CONTEXT_DIR}
 3. **最多循环 2 次**，避免无限循环
 4. 最终结果写入 `{CONTEXT_DIR}/verified.json`
 
+**门控**：@verification 完成后，**必须确认** `{CONTEXT_DIR}/verified.json` 存在且非空，否则报错并停止，不得进入阶段 5。
+
 ### 阶段 5: 生成报告
+
+**前置检查**：确认 `verified.json` 已就绪。
 
 调用 @reporter，**传递路径上下文**：
 
