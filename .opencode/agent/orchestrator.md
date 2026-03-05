@@ -162,7 +162,9 @@ permission:
     ↓ 必须：识别到 C/C++ 源文件
 阶段 2（@architecture）
     ↓ 必须：project_model.json 和 call_graph.json 写入成功
+    ↓ [门控] 确认两文件存在且非空，否则禁止继续
 阶段 3（@dataflow-scanner 和 @security-auditor 并行）
+    注意：两者必须在 @architecture 完全结束后才能启动
     ↓ 必须：两个 Agent 均完成，candidates_df.json 和 candidates_sec.json 写入成功
 阶段 4（@verification）
     ↓ 必须：verified.json 写入成功
@@ -252,7 +254,18 @@ mkdir -p {CONTEXT_DIR}
 
 ### 阶段 3: 漏洞扫描
 
-**前置检查**：确认 `project_model.json` 和 `call_graph.json` 已就绪。
+**前置检查（必须通过，否则禁止进入本阶段）**：
+
+```
+检查1: {CONTEXT_DIR}/project_model.json 存在且非空 → 通过/失败
+检查2: {CONTEXT_DIR}/call_graph.json    存在且非空 → 通过/失败
+```
+
+两项全部通过才代表 @architecture 已成功完成，**方可开始调用扫描 Agent**。若任意一项失败，报错并停止：
+```
+[错误] @architecture 输出不完整，禁止进入阶段 3。
+[建议] 请重新运行 @architecture，确认其完整写入输出文件后再继续。
+```
 
 **并行调用** @dataflow-scanner 和 @security-auditor，**传递路径上下文**：
 
