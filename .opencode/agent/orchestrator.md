@@ -35,18 +35,21 @@ permission:
 
 | 变量 | 说明 | 确定方式 |
 |------|------|----------|
-| `PROJECT_ROOT` | 被扫描项目的根目录 | 用户指定或当前工作目录 |
+| `PROJECT_ROOT` | 被扫描项目的根目录 | **必须由用户在提示词中明确指定**，不得使用当前工作目录代替 |
 | `SCAN_OUTPUT` | 扫描输出目录 | `{PROJECT_ROOT}/scan-results` |
 | `CONTEXT_DIR` | 上下文存储目录 | `{SCAN_OUTPUT}/.context` |
 
 ### 路径确定流程
 
 ```
-1. 用户请求扫描 → 确定 PROJECT_ROOT（用户指定的目录或当前目录）
-2. 拼接 SCAN_OUTPUT = {PROJECT_ROOT}/scan-results
-3. 拼接 CONTEXT_DIR = {SCAN_OUTPUT}/.context
-4. 创建目录: mkdir -p {CONTEXT_DIR}
-5. 后续所有子 Agent 调用时传递这三个路径
+1. 从用户提示词中提取目标项目路径，作为 PROJECT_ROOT
+   - 支持格式：绝对路径（如 D:/projects/myapp、/home/user/myapp）
+   - 若用户未提供路径，立即询问："请指定要扫描的项目路径"，不得假设为当前目录
+2. 验证 PROJECT_ROOT 存在且为目录，否则报错并停止
+3. 拼接 SCAN_OUTPUT = {PROJECT_ROOT}/scan-results
+4. 拼接 CONTEXT_DIR = {SCAN_OUTPUT}/.context
+5. 创建目录: mkdir -p {CONTEXT_DIR}
+6. 后续所有子 Agent 调用时传递这三个路径
 ```
 
 ### 调用子 Agent 时传递路径
@@ -162,8 +165,10 @@ permission:
 
 **1. 确定项目根目录**：
 
+从用户提示词中提取目标项目的绝对路径，赋值给 `PROJECT_ROOT`。若用户未提供，**立即停止并询问路径，不得默认为当前工作目录**。
+
 ```
-PROJECT_ROOT = 用户指定的目录 或 当前工作目录
+PROJECT_ROOT = 用户在提示词中明确指定的项目绝对路径
 SCAN_OUTPUT = {PROJECT_ROOT}/scan-results
 CONTEXT_DIR = {SCAN_OUTPUT}/.context
 ```
