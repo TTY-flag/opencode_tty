@@ -78,9 +78,9 @@ dataflow-scanner (协调者 - 你)
 
 1. **读取项目模型**: 从 `project_model.json` 获取模块列表
 2. **模块调度**: 为每个模块调用 `@dataflow-module-scanner`
-3. **结果收集**: 汇总各模块的候选漏洞
+3. **结果收集**: 记录各模块写入的文件路径和跨模块提示（不在上下文中保存漏洞详情）
 4. **跨模块分析**: 分析模块间的数据流传递
-5. **输出合并**: 将所有发现写入 `candidates_df.json`
+5. **输出合并**: 读取所有模块中间文件合并写入 `candidates_df.json`
 
 ## 接收输入
 
@@ -154,27 +154,35 @@ dataflow-scanner (协调者 - 你)
 ## 扫描要求
 1. 在模块内进行完整的污点分析
 2. 标记可能流出模块的数据（供跨模块分析）
-3. 返回候选漏洞列表和跨模块数据流提示
+3. **将漏洞详情写入 `{CONTEXT_DIR}/candidates_df_{模块简称}.json`**
+4. 返回文本只包含：扫描统计、写入的文件路径、跨模块数据流提示（不含完整漏洞详情）
 ```
 
 ### 阶段 4: 收集子 Agent 结果
 
-每个子 Agent 返回：
+每个子 Agent 返回的文本**只包含摘要**（漏洞详情已写入文件）：
 
-1. **模块内漏洞**: 完整的候选漏洞列表
-2. **跨模块提示**: 数据流出/流入点
+1. **写入文件路径**: 记录该模块写入的中间文件路径
+2. **跨模块提示**: 数据流出/流入点（体积小，可留在上下文中）
+
+**从返回文本中提取并记录**：
 
 ```
-=== 模块扫描结果: [模块名] ===
-
-候选漏洞:
-- VULN-DF-001: buffer_overflow @ file.cpp:123
-- VULN-DF-002: command_injection @ handler.cpp:456
-
-跨模块数据流提示:
-- [OUT] src/ipc/handler.cpp:250 → handle_request() 的 data 参数流向外部
-- [IN] src/ipc/server.cpp:100 ← 接收来自 main 模块的配置
+模块: [模块名]
+文件: {CONTEXT_DIR}/candidates_df_{模块简称}.json（Z 个漏洞）
+[OUT]: src/ipc/handler.cpp:250 → handle_request() 的 data 参数流向外部
+[IN]:  src/ipc/server.cpp:100 ← 接收来自 main 模块的配置
 ```
+
+维护一个**模块文件路径列表**，用于阶段 6 读取合并：
+```
+已完成模块文件:
+- {CONTEXT_DIR}/candidates_df_ipc.json
+- {CONTEXT_DIR}/candidates_df_plugin.json
+- {CONTEXT_DIR}/candidates_df_config.json
+```
+
+**不要将漏洞详情保存在协调者上下文中**，只记录文件路径和跨模块提示。
 
 ### 阶段 5: 跨模块数据流分析
 
@@ -198,13 +206,24 @@ dataflow-scanner (协调者 - 你)
 
 ### 阶段 6: 合并输出
 
-将所有漏洞（模块内 + 跨模块）写入 `{CONTEXT_DIR}/candidates_df.json`：
+**通过读取文件合并**，而非依赖上下文中的漏洞详情：
+
+**步骤 1**：读取阶段 4 记录的所有模块中间文件，合并 `vulnerabilities` 数组：
+```
+读取: {CONTEXT_DIR}/candidates_df_ipc.json    → 提取 vulnerabilities[]
+读取: {CONTEXT_DIR}/candidates_df_plugin.json → 提取 vulnerabilities[]
+读取: {CONTEXT_DIR}/candidates_df_config.json → 提取 vulnerabilities[]
+```
+
+**步骤 2**：将阶段 5 产生的跨模块漏洞条目追加到合并列表。
+
+**步骤 3**：写入最终文件 `{CONTEXT_DIR}/candidates_df.json`：
 
 ```json
 {
   "vulnerabilities": [
     {
-      "id": "VULN-DF-001",
+      "id": "VULN-DF-IPC-001",
       "type": "buffer_overflow",
       "severity": "High",
       "cwe": "CWE-120",
@@ -219,7 +238,7 @@ dataflow-scanner (协调者 - 你)
       "pre_validated": true
     },
     {
-      "id": "VULN-DF-005",
+      "id": "VULN-DF-CROSS-001",
       "type": "path_injection",
       "severity": "High",
       "cross_module": true,
@@ -234,6 +253,8 @@ dataflow-scanner (协调者 - 你)
   ]
 }
 ```
+
+中间文件（`candidates_df_*.json`）保留在 `{CONTEXT_DIR}` 中，可用于调试和问题追溯。
 
 ## 进度报告
 

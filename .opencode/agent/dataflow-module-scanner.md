@@ -41,9 +41,20 @@ permission:
 | 读取源代码 | `{PROJECT_ROOT}/[模块路径]/...` |
 | 文件路径格式 | 使用相对于 `PROJECT_ROOT` 的路径 |
 
+### 写入路径
+| 内容 | 路径 |
+|------|------|
+| 模块候选漏洞 | `{CONTEXT_DIR}/candidates_df_{模块简称}.json` |
+
+**模块简称规则**：取模块名的英文部分，全部小写，空格替换为 `_`。例如：
+- "IPC通信模块" → `ipc`
+- "插件系统模块" → `plugin`
+- "SMAP内存管理" → `smap`
+
 ### 重要
 - 所有文件路径在输出中都使用**相对于项目根目录**的格式
 - 例如: `src/ipc/handler.cpp` 而不是绝对路径
+- **漏洞详情必须写入中间文件，不得在返回文本中完整输出**（避免协调者上下文积累过大）
 
 ## 接收输入
 
@@ -201,9 +212,44 @@ CWE: CWE-120
 === 结束 ===
 ```
 
+## 结构化输出（必须先写文件）
+
+扫描完成后，**首先**将所有漏洞详情写入 `{CONTEXT_DIR}/candidates_df_{模块简称}.json`，格式如下：
+
+```json
+{
+  "module": "IPC通信模块",
+  "vulnerabilities": [
+    {
+      "id": "VULN-DF-IPC-001",
+      "type": "buffer_overflow",
+      "severity": "High",
+      "cwe": "CWE-120",
+      "file": "src/ipc/handler.cpp",
+      "line_start": 250,
+      "line_end": 255,
+      "function": "RecvMessage",
+      "code_snippet": "char buffer[256];\nrecv(sock, buffer, msg_len, 0);",
+      "data_flow": [
+        {"file": "src/ipc/handler.cpp", "line": 173, "description": "[SOURCE] accept() 接受连接"},
+        {"file": "src/ipc/handler.cpp", "line": 255, "description": "[SINK] 无边界检查"}
+      ],
+      "source_agent": "dataflow-scanner",
+      "source_module": "IPC通信模块",
+      "pre_validated": true
+    }
+  ]
+}
+```
+
+写入完成后，在返回文本中注明文件路径，例如：
+```
+已写入: {CONTEXT_DIR}/candidates_df_ipc.json（5 个漏洞）
+```
+
 ## 返回给协调者的内容
 
-扫描完成后，返回以下结构化结果：
+**漏洞详情已写入文件，返回文本中只包含摘要和跨模块提示**，不重复输出漏洞详情：
 
 ```
 === 模块扫描完成: [模块名] ===
@@ -212,18 +258,15 @@ CWE: CWE-120
 - 扫描文件数: X
 - 代码行数: Y
 - 发现候选漏洞: Z 个
-
-## 候选漏洞列表
-
-[按严重性排序的漏洞列表，每个包含完整信息]
+- 写入文件: {CONTEXT_DIR}/candidates_df_{模块简称}.json
 
 ## 跨模块数据流提示
 
 [OUT]:
-- ...
+- src/ipc/handler.cpp:280 → DispatchRequest(request)，数据: request 结构体，流向: 被其他模块调用
 
 [IN]:
-- ...
+- src/ipc/server.cpp:50 ← InitServer(config)，数据: config 配置对象，来源: 来自 config 模块
 
 === 结束 ===
 ```
@@ -232,5 +275,5 @@ CWE: CWE-120
 
 1. **聚焦模块内分析** - 不要尝试追踪到其他模块
 2. **标记边界数据流** - 流出/流入点是协调者跨模块分析的关键
-3. **保持输出结构化** - 便于协调者解析和汇总
+3. **先写文件再返回摘要** - 漏洞详情写入 JSON 文件，返回文本只含统计和跨模块提示
 4. **预验证减少误报** - 只报告通过预验证的漏洞

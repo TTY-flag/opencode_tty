@@ -443,13 +443,13 @@ your-project/
 
 扫描过程中使用以下路径变量：
 
-| 变量 | 说明 | 默认值 |
+| 变量 | 说明 | 确定方式 |
 |------|------|--------|
-| `PROJECT_ROOT` | 被扫描项目的根目录 | 用户指定或当前工作目录 |
+| `PROJECT_ROOT` | 被扫描项目的根目录 | **必须由用户在提示词中明确指定**，不得使用当前工作目录代替 |
 | `SCAN_OUTPUT` | 扫描输出目录 | `{PROJECT_ROOT}/scan-results` |
 | `CONTEXT_DIR` | 上下文存储目录 | `{SCAN_OUTPUT}/.context` |
 
-Orchestrator 在调用子 Agent 时会传递这些路径。
+Orchestrator 在初始化阶段创建目录并写入占位文件，调用子 Agent 时显式传递这三个路径。
 
 ## 适用场景
 
