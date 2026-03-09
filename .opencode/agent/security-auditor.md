@@ -99,9 +99,36 @@ security-auditor (协调者 - 你)
 | 5 | 配置管理 | config, settings |
 | 6 | 其他模块 | log, util 等 |
 
-### 阶段 2: 调度子 Agent
+### 阶段 2: 断点续扫检测（重要）
 
-为每个模块调用 `@security-module-scanner`，**必须传递路径上下文**：
+**扫描可能中途中断，必须在调度前检测已完成的模块，避免重复审计。**
+
+对排序后的模块列表逐一检查 `{CONTEXT_DIR}/candidates_sec_{模块简称}.json` 是否已存在且非空：
+
+```
+断点续扫检测:
+├── candidates_sec_auth.json    存在 (5KB)  → 跳过 认证授权模块
+├── candidates_sec_crypto.json  不存在      → 待审计
+├── candidates_sec_network.json 不存在      → 待审计
+└── candidates_sec_config.json  不存在      → 待审计
+
+已完成: 1 个模块（从中间文件恢复）
+待审计: 3 个模块
+```
+
+**跳过规则**：
+- 文件存在且大小 > 0 → 该模块已完成，跳过
+- 文件不存在或大小为 0 → 该模块未完成，需要调度子 Agent
+
+**跳过的模块仍然需要**：
+1. 读取其中间文件提取跨模块安全提示，用于阶段 5 的跨模块分析
+2. 将文件路径加入合并列表，用于阶段 6 的 merge-json 合并
+
+### 阶段 3: 调度子 Agent
+
+**只对阶段 2 中判定为"待审计"的模块调度子 Agent。**
+
+为每个待审计模块调用 `@security-module-scanner`，**必须传递路径上下文**：
 
 ```
 @security-module-scanner
@@ -130,22 +157,25 @@ security-auditor (协调者 - 你)
 4. 返回文本只包含：审计统计、写入的文件路径、跨模块安全提示
 ```
 
-### 阶段 3: 收集子 Agent 结果
+### 阶段 4: 收集子 Agent 结果
 
 每个子 Agent 返回的文本**只包含摘要**（漏洞详情已写入文件）：
 
 1. **写入文件路径**: 记录该模块写入的中间文件路径
 2. **跨模块安全提示**: 认证绕过、凭证传递等跨模块风险
 
-维护一个**模块文件路径列表**，用于阶段 5 合并：
+维护一个**完整模块文件路径列表**（包含续扫恢复的 + 本次新审计的），用于合并：
 ```
-已完成模块文件:
-- {CONTEXT_DIR}/candidates_sec_auth.json
-- {CONTEXT_DIR}/candidates_sec_crypto.json
-- {CONTEXT_DIR}/candidates_sec_config.json
+全部模块文件（含恢复 + 新审计）:
+- {CONTEXT_DIR}/candidates_sec_auth.json    ← 续扫恢复
+- {CONTEXT_DIR}/candidates_sec_crypto.json  ← 本次审计
+- {CONTEXT_DIR}/candidates_sec_network.json ← 本次审计
+- {CONTEXT_DIR}/candidates_sec_config.json  ← 本次审计
 ```
 
-### 阶段 4: 跨模块安全分析
+对于续扫恢复的模块，需要读取其中间文件提取跨模块安全提示，补充到跨模块分析列表中。
+
+### 阶段 5: 跨模块安全分析
 
 收集所有子 Agent 的跨模块安全提示后：
 
@@ -156,7 +186,7 @@ security-auditor (协调者 - 你)
 
 将跨模块安全漏洞写入 `{CONTEXT_DIR}/candidates_sec_cross_module.json`。
 
-### 阶段 5: 使用 merge-json 工具合并输出
+### 阶段 6: 使用 merge-json 工具合并输出
 
 **使用 `merge-json` 工具将所有模块中间文件合并为最终输出。**
 
@@ -178,10 +208,11 @@ security-auditor (协调者 - 你)
 
 ```
 [Security Auditor] 模块审计进度: X/Y
-├── 已完成: auth_module, crypto_module
+├── 续扫恢复: auth_module（中间文件已存在，跳过）
+├── 已完成: crypto_module
 ├── 当前: network_module
 ├── 待审计: config_module
-└── 发现候选漏洞: XX 个
+└── 发现候选漏洞: XX 个（含恢复 XX + 新审计 XX）
 ```
 
 ## 错误处理

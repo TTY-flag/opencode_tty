@@ -80,6 +80,61 @@ permission:
 - 若检查失败，**停止流程并向用户报告具体原因**，不得跳过继续执行
 - 阶段 3 中两个 Agent 可并行，但必须**等待两者都完成**才能进入阶段 4
 
+## 断点续扫机制（重要）
+
+**扫描过程可能中途中断（LLM 超时、用户暂停等），必须支持从断点恢复，避免重复扫描已完成的工作。**
+
+### Agent 级续扫检测
+
+在每个阶段开始前，检查 `scan_log.json` 中对应 Agent 的状态：
+
+```
+断点续扫检测:
+├── scan_log.json 存在？
+│   ├── 否 → 全新扫描，正常执行
+│   └── 是 → 读取 agents[] 数组，检查各 Agent 状态
+│
+├── architecture: status = "success"
+│   └── project_model.json + call_graph.json 存在且非空 → 跳过阶段 2
+│
+├── dataflow-scanner: status = "success"
+│   └── candidates_df.json 存在且非空 → 跳过 dataflow-scanner
+│
+├── dataflow-scanner: status 不存在或非 "success"
+│   └── 检查中间文件 candidates_df_*.json
+│       └── 存在部分中间文件 → 调用 @dataflow-scanner（内部会自动续扫未完成模块）
+│
+├── security-auditor: 同上逻辑
+│
+├── verification: status = "success"
+│   └── verified.json 存在且非空 → 跳过阶段 4
+│
+└── reporter: status = "success"
+    └── report.md 存在 → 跳过阶段 5
+```
+
+### 续扫判定规则
+
+| Agent | 判定为"已完成" | 判定为"需执行" |
+|-------|-------------|-------------|
+| @architecture | `scan_log.json` 中 status="success" **且** `project_model.json` + `call_graph.json` 存在非空 | 否则 |
+| @dataflow-scanner | `scan_log.json` 中 status="success" **且** `candidates_df.json` 存在非空 | 否则（协调者内部会检测模块级断点） |
+| @security-auditor | `scan_log.json` 中 status="success" **且** `candidates_sec.json` 存在非空 | 否则（协调者内部会检测模块级断点） |
+| @verification | `scan_log.json` 中 status="success" **且** `verified.json` 存在非空 | 否则 |
+| @reporter | `scan_log.json` 中 status="success" **且** `report.md` 存在 | 否则 |
+
+### 续扫日志
+
+当检测到断点续扫时，在进度报告中明确标注：
+
+```
+[断点续扫] 检测到上次未完成的扫描（scan_id: xxx）
+├── @architecture: 已完成 → 跳过
+├── @dataflow-scanner: 未完成（3/5 模块已扫描） → 续扫
+├── @security-auditor: 未开始 → 全新扫描
+└── 从阶段 3 恢复执行
+```
+
 ## 启动扫描
 
 当用户请求扫描项目时：
@@ -104,13 +159,30 @@ CONTEXT_DIR = {SCAN_OUTPUT}/.context
 mkdir -p {CONTEXT_DIR}
 ```
 
-**步骤 3：初始化上下文文件**
+**步骤 3：断点续扫检测**
+
+检查 `{CONTEXT_DIR}/scan_log.json` 是否存在：
+
+- **不存在** → 全新扫描，继续步骤 4 初始化上下文文件
+- **存在** → 读取 `scan_log.json`，判断上次扫描状态
+  - `status = "success"` → 上次扫描已完成，提示用户并询问是否重新扫描
+  - `status = "running"` → 上次扫描中途中断，进入**续扫模式**
+    - 保留已有上下文文件（`project_model.json`、中间候选文件等）
+    - **不要重新初始化上下文文件**，直接跳到步骤 5
+    - 按照"断点续扫机制"中的判定规则确定从哪个阶段恢复
+
+**步骤 4：初始化上下文文件（仅全新扫描时执行）**
 
 | 文件 | 初始内容 |
 |------|----------|
 | `candidates_df.json` | `{"vulnerabilities": []}` |
 | `candidates_sec.json` | `{"vulnerabilities": []}` |
 | `scan_log.json` | `{"scan_id": "<UUID>", "start_time": "<ISO8601>", "status": "running", "agents": []}` |
+
+**步骤 5：确定执行起点**
+
+- **全新扫描** → 从阶段 1 开始
+- **续扫模式** → 按照断点续扫判定规则，找到第一个未完成的阶段开始执行
 
 ### 阶段 1: 项目结构分析
 

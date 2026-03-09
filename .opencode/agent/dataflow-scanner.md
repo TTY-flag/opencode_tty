@@ -120,9 +120,37 @@ dataflow-scanner (协调者 - 你)
 | 4 | 配置解析 | config, parser |
 | 5 | 日志/工具 | log, util |
 
-### 阶段 3: 调度子 Agent
+### 阶段 3: 断点续扫检测（重要）
 
-为每个模块调用 `@dataflow-module-scanner`，**必须传递路径上下文**：
+**扫描可能中途中断，必须在调度前检测已完成的模块，避免重复扫描。**
+
+对排序后的模块列表逐一检查 `{CONTEXT_DIR}/candidates_df_{模块简称}.json` 是否已存在且非空：
+
+```
+断点续扫检测:
+├── candidates_df_ipc.json      存在 (12KB) → 跳过 IPC通信模块
+├── candidates_df_plugin.json   存在 (8KB)  → 跳过 插件系统模块
+├── candidates_df_smap.json     不存在      → 待扫描
+├── candidates_df_config.json   不存在      → 待扫描
+└── candidates_df_log.json      不存在      → 待扫描
+
+已完成: 2 个模块（从中间文件恢复）
+待扫描: 3 个模块
+```
+
+**跳过规则**：
+- 文件存在且大小 > 0 → 该模块已完成，跳过
+- 文件不存在或大小为 0 → 该模块未完成，需要调度子 Agent
+
+**跳过的模块仍然需要**：
+1. 读取其中间文件提取跨模块数据流提示（`[OUT]`/`[IN]` 标记），用于阶段 6 的跨模块分析
+2. 将文件路径加入合并列表，用于阶段 7 的 merge-json 合并
+
+### 阶段 4: 调度子 Agent
+
+**只对阶段 3 中判定为"待扫描"的模块调度子 Agent。**
+
+为每个待扫描模块调用 `@dataflow-module-scanner`，**必须传递路径上下文**：
 
 ```
 @dataflow-module-scanner
@@ -151,24 +179,28 @@ dataflow-scanner (协调者 - 你)
 4. 返回文本只包含：扫描统计、写入的文件路径、跨模块数据流提示（不含完整漏洞详情）
 ```
 
-### 阶段 4: 收集子 Agent 结果
+### 阶段 5: 收集子 Agent 结果
 
 每个子 Agent 返回的文本**只包含摘要**（漏洞详情已写入文件）：
 
 1. **写入文件路径**: 记录该模块写入的中间文件路径
 2. **跨模块提示**: 数据流出/流入点（体积小，可留在上下文中）
 
-维护一个**模块文件路径列表**，用于阶段 6 合并：
+维护一个**完整模块文件路径列表**（包含续扫恢复的 + 本次新扫描的），用于合并：
 ```
-已完成模块文件:
-- {CONTEXT_DIR}/candidates_df_ipc.json
-- {CONTEXT_DIR}/candidates_df_plugin.json
-- {CONTEXT_DIR}/candidates_df_config.json
+全部模块文件（含恢复 + 新扫描）:
+- {CONTEXT_DIR}/candidates_df_ipc.json     ← 续扫恢复
+- {CONTEXT_DIR}/candidates_df_plugin.json  ← 续扫恢复
+- {CONTEXT_DIR}/candidates_df_smap.json    ← 本次扫描
+- {CONTEXT_DIR}/candidates_df_config.json  ← 本次扫描
+- {CONTEXT_DIR}/candidates_df_log.json     ← 本次扫描
 ```
 
 **不要将漏洞详情保存在协调者上下文中**，只记录文件路径和跨模块提示。
 
-### 阶段 5: 跨模块数据流分析
+对于续扫恢复的模块，需要读取其中间文件提取跨模块数据流提示，补充到跨模块提示列表中。
+
+### 阶段 6: 跨模块数据流分析
 
 收集所有子 Agent 的跨模块提示后：
 
@@ -178,7 +210,7 @@ dataflow-scanner (协调者 - 你)
 
 将跨模块漏洞写入一个单独的中间文件 `{CONTEXT_DIR}/candidates_df_cross_module.json`，格式与模块中间文件一致，但增加 `cross_module: true` 和 `modules_involved` 字段。
 
-### 阶段 6: 使用 merge-json 工具合并输出
+### 阶段 7: 使用 merge-json 工具合并输出
 
 **使用 `merge-json` 工具将所有模块中间文件合并为最终输出，不要手动拼接 JSON 内容。**
 
@@ -208,10 +240,11 @@ dataflow-scanner (协调者 - 你)
 
 ```
 [DataFlow Scanner] 模块扫描进度: X/Y
-├── 已完成: module1, module2
-├── 当前: module3
-├── 待扫描: module4, module5
-└── 发现候选漏洞: XX 个
+├── 续扫恢复: module1, module2（中间文件已存在，跳过）
+├── 已完成: module3
+├── 当前: module4
+├── 待扫描: module5
+└── 发现候选漏洞: XX 个（含恢复 XX + 新扫描 XX）
 ```
 
 ## 错误处理
