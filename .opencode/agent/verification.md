@@ -168,7 +168,11 @@ permission:
 
 验证完成后，**必须将结果写入** `{CONTEXT_DIR}/verified.json`。
 
-关于 verified.json 的 Schema 定义，参考 `@skill:agent-communication`。
+关于 JSON 格式规范和 verified.json 的 Schema 定义，参考 `@skill:agent-communication`。
+
+**写入后必须调用 `validate-json` 工具校验**：
+- PASS → 校验通过，向 Orchestrator 报告完成
+- FAIL → 根据错误信息修复 JSON 内容，重新写入文件并再次校验（最多重试 2 次）
 
 ### 写入说明
 

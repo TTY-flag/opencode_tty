@@ -40,11 +40,19 @@ export default tool({
 
     const merged: unknown[] = []
     const details: string[] = []
+    const warnings: string[] = []
 
     for (const filename of matched) {
       const filepath = join(dir, filename)
       const raw = await readFile(filepath, "utf-8")
-      const data = JSON.parse(raw)
+      let data
+      try {
+        data = JSON.parse(raw)
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err)
+        warnings.push(`  ⚠ ${filename}: JSON parse failed - ${message}`)
+        continue
+      }
       const items = Array.isArray(data[args.key]) ? data[args.key] : []
       merged.push(...items)
       details.push(`  ${filename}: ${items.length} items`)
@@ -56,14 +64,19 @@ export default tool({
     const result = { [args.key]: merged }
     await writeFile(args.output, JSON.stringify(result, null, 2), "utf-8")
 
-    return [
-      `Merged ${matched.length} files → ${basename(args.output)}`,
+    const lines = [
+      `Merged ${matched.length - warnings.length}/${matched.length} files → ${basename(args.output)}`,
       `Total ${args.key}: ${merged.length}`,
       "",
       "Source files:",
       ...details,
-      "",
-      `Output: ${args.output}`,
-    ].join("\n")
+    ]
+
+    if (warnings.length > 0) {
+      lines.push("", "Warnings (skipped files):", ...warnings)
+    }
+
+    lines.push("", `Output: ${args.output}`)
+    return lines.join("\n")
   },
 })

@@ -126,9 +126,15 @@ permission:
 
 ## 结构化输出（必须先写文件）
 
-扫描完成后，**首先**将所有漏洞详情写入 `{CONTEXT_DIR}/candidates_sec_{模块简称}.json`：
+扫描完成后，**首先**将所有漏洞详情写入 `{CONTEXT_DIR}/candidates_sec_{模块简称}.json`。
 
-关于 JSON 格式详情，参考 `@skill:agent-communication` 中的模块中间文件 Schema。
+关于 JSON 格式规范和 Schema 详情，参考 `@skill:agent-communication`。
+
+**写入后必须调用 `validate-json` 工具校验**：
+- PASS → 校验通过，继续返回摘要
+- FAIL → 根据错误信息修复 JSON 内容，重新写入文件并再次校验（最多重试 2 次）
+
+JSON 示例：
 
 ```json
 {

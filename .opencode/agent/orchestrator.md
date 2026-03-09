@@ -179,6 +179,8 @@ mkdir -p {CONTEXT_DIR}
 | `candidates_sec.json` | `{"vulnerabilities": []}` |
 | `scan_log.json` | `{"scan_id": "<UUID>", "start_time": "<ISO8601>", "status": "running", "agents": []}` |
 
+写入每个 JSON 文件后，调用 `validate-json` 工具校验。校验失败时修复并重试。
+
 **步骤 5：确定执行起点**
 
 - **全新扫描** → 从阶段 1 开始
@@ -341,13 +343,15 @@ mkdir -p {CONTEXT_DIR}
 
 扫描完成后，**必须将 Agent 调用日志写入** `scan-results/.context/scan_log.json`。
 
-关于 scan_log.json 的 Schema 定义，参考 `@skill:agent-communication`。
+关于 JSON 格式规范和 scan_log.json 的 Schema 定义，参考 `@skill:agent-communication`。
 
 ### 写入时机
 
 1. **扫描开始时**：创建日志文件，记录 `scan_id`、`start_time`、`project_name`
 2. **每个 Agent 完成后**：追加该 Agent 的调用记录
 3. **扫描结束时**：更新 `end_time`、`duration_seconds`、`status` 和 `summary`
+
+**每次写入或更新 `scan_log.json` 后，必须调用 `validate-json` 工具校验**。校验失败时根据错误信息修复并重试（最多 2 次）。
 
 ## 错误处理
 

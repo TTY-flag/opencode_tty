@@ -151,11 +151,15 @@ CWE: CWE-120
 
 扫描完成后，**首先**将所有漏洞详情写入 `{CONTEXT_DIR}/candidates_df_{模块简称}.json`。
 
-关于 JSON 格式详情，参考 `@skill:agent-communication` 中的模块中间文件 Schema。
+关于 JSON 格式规范和 Schema 详情，参考 `@skill:agent-communication`。
 
-写入完成后，在返回文本中注明文件路径，例如：
+**写入后必须调用 `validate-json` 工具校验**：
+- PASS → 校验通过，继续返回摘要
+- FAIL → 根据错误信息修复 JSON 内容，重新写入文件并再次校验（最多重试 2 次）
+
+写入且校验通过后，在返回文本中注明文件路径，例如：
 ```
-已写入: {CONTEXT_DIR}/candidates_df_ipc.json（5 个漏洞）
+已写入: {CONTEXT_DIR}/candidates_df_ipc.json（5 个漏洞，validate-json PASS）
 ```
 
 ## 返回给协调者的内容

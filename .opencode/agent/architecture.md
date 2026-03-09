@@ -191,15 +191,23 @@ permission:
 
 **完成分析后，必须按以下顺序写入三个文件。**
 
-关于各文件的 JSON Schema 定义，参考 `@skill:agent-communication`。
+关于各文件的 JSON Schema 定义和格式规范，参考 `@skill:agent-communication`。
 
 ### 第一步：写入 `{CONTEXT_DIR}/project_model.json`
 
 包含 `project_name`、`scan_time`、`lsp_available`、`total_files`、`total_lines`、`modules`、`files`、`entry_points`、`attack_surfaces` 等字段。
 
+写入后调用 `validate-json` 工具校验：
+- PASS → 继续第二步
+- FAIL → 根据错误信息修复 JSON，重新写入并再次校验（最多重试 2 次）
+
 ### 第二步：写入 `{CONTEXT_DIR}/call_graph.json`
 
 包含 `functions`（函数节点及调用关系）和 `data_flows`（数据流路径）字段。
+
+写入后调用 `validate-json` 工具校验：
+- PASS → 继续第三步
+- FAIL → 根据错误信息修复 JSON，重新写入并再次校验（最多重试 2 次）
 
 ### 第三步：写入 `{SCAN_OUTPUT}/threat_analysis_report.md`
 
@@ -217,14 +225,14 @@ permission:
 
 ## 完成确认（必须执行）
 
-写完三个文件后，**必须逐一确认文件已成功写入磁盘**，然后向 Orchestrator 报告：
+写完三个文件后，**必须逐一确认文件已成功写入磁盘且 JSON 校验通过**，然后向 Orchestrator 报告：
 
 ```
 === Architecture 完成确认 ===
-✅ {CONTEXT_DIR}/project_model.json  已写入（XX 个文件，XX 个模块，XX 个入口点）
-✅ {CONTEXT_DIR}/call_graph.json     已写入（XX 个函数节点）
+✅ {CONTEXT_DIR}/project_model.json  已写入且校验通过（XX 个文件，XX 个模块，XX 个入口点）
+✅ {CONTEXT_DIR}/call_graph.json     已写入且校验通过（XX 个函数节点）
 ✅ {SCAN_OUTPUT}/threat_analysis_report.md 已写入
 === 可以进入下一阶段 ===
 ```
 
-如果任何文件写入失败，**立即报错并重试**，不得跳过。
+如果任何文件写入或校验失败，**立即报错并重试**，不得跳过。
