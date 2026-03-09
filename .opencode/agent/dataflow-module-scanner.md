@@ -9,16 +9,7 @@ permission:
   list: allow
   lsp: allow
   edit: allow
-  webfetch: ask
   bash:
-    "find *": allow
-    "ls *": allow
-    "wc *": allow
-    "head *": allow
-    "tail *": allow
-    "cat *": allow
-    "grep *": allow
-    "xargs *": allow
     "*": allow
   todowrite: allow
   todoread: allow
@@ -30,16 +21,12 @@ permission:
 
 **路径由协调者 `@dataflow-scanner` 在调用时传递**，不要硬编码。
 
+关于路径约定的完整说明，参考 `@skill:agent-communication`。
+
 ### 接收路径
 协调者会在调用时传递：
 - **项目根目录** (`PROJECT_ROOT`): 源代码所在位置
-- **上下文目录** (`CONTEXT_DIR`): JSON 文件读写位置（如需读取）
-
-### 使用路径
-| 操作 | 路径 |
-|------|------|
-| 读取源代码 | `{PROJECT_ROOT}/[模块路径]/...` |
-| 文件路径格式 | 使用相对于 `PROJECT_ROOT` 的路径 |
+- **上下文目录** (`CONTEXT_DIR`): JSON 文件读写位置
 
 ### 写入路径
 | 内容 | 路径 |
@@ -53,8 +40,7 @@ permission:
 
 ### 重要
 - 所有文件路径在输出中都使用**相对于项目根目录**的格式
-- 例如: `src/ipc/handler.cpp` 而不是绝对路径
-- **漏洞详情必须写入中间文件，不得在返回文本中完整输出**（避免协调者上下文积累过大）
+- **漏洞详情必须写入中间文件，不得在返回文本中完整输出**
 
 ## 接收输入
 
@@ -73,7 +59,7 @@ permission:
 ## 核心能力
 
 ### 1. 内存安全分析
-- **缓冲区溢出**: 检测 strcpy, sprintf, memcpy 等不安全操作
+- **缓冲区溢出**: 检测不安全的内存操作
 - **Use-After-Free**: 追踪内存释放后的使用
 - **双重释放**: 检测同一内存的多次释放
 - **空指针解引用**: 检测未检查的指针使用
@@ -85,42 +71,24 @@ permission:
 - **类型混淆**: 检测有符号/无符号混用问题
 
 ### 3. 注入漏洞分析
-- **命令注入**: 检测 system(), popen() 等的不安全调用
+- **命令注入**: 检测命令执行函数的不安全调用
 - **格式化字符串**: 检测 printf 系列的格式化漏洞
 
 ## 污点追踪 (Taint Tracking)
 
-### 污点源 (Taint Sources)
-| 类别 | 函数 |
-|------|------|
-| 网络输入 | recv, recvfrom, read (socket), SSL_read |
-| 文件输入 | fread, fgets, getline, read (file) |
-| 环境输入 | getenv, secure_getenv |
-| 用户输入 | scanf, gets, fgets (stdin) |
-| 命令行 | argv |
-| **模块入口** | 协调者传递的 entry_points |
+关于污点源（Source）和污点汇（Sink）的完整定义，参考 `@skill:c-cpp-taint-tracking`。
 
-### 污点汇 (Taint Sinks)
-| 类别 | 函数 | 风险 |
-|------|------|------|
-| 内存操作 | strcpy, strcat, sprintf, memcpy | 缓冲区溢出 |
-| 命令执行 | system, popen, execl, execv | 命令注入 |
-| 格式化 | printf, fprintf, sprintf, syslog | 格式化字符串 |
-| 文件操作 | open, fopen, access, unlink | 路径遍历 |
-| 内存分配 | malloc, calloc, realloc | 整数溢出 |
-| 动态加载 | dlopen, dlsym | 库注入 |
+在进行污点分析时，按照以下流程：
+1. 从 Skill 中定义的**污点源**开始，标记外部输入数据
+2. 沿函数调用链追踪数据传播
+3. 检查数据是否到达**污点汇**（危险函数）
+4. 检查路径中是否有清洗操作
 
 ## 模块内跨文件追踪
 
 **重要**: 你只负责模块内的追踪，跨模块追踪由协调者处理。
 
-### 追踪工具优先级：LSP > Call Graph > Grep
-
-| 优先级 | 工具 | 使用场景 |
-|--------|------|----------|
-| 1 | **LSP** | Go to Definition, Find References |
-| 2 | **调用图** | 协调者传递的模块内调用关系 |
-| 3 | **grep** | LSP 无响应时回退 |
+关于跨文件分析的工具优先级和方法，参考 `@skill:cross-file-analysis`。
 
 ### 追踪深度要求
 
@@ -133,28 +101,11 @@ recv() [handler.cpp]
       → strcpy() [parser.cpp] ← SINK
 ```
 
-### 跨文件追踪场景
-
-| 场景 | 方法 |
-|------|------|
-| 函数调用 | LSP Go to Definition |
-| 返回值使用 | LSP Find References |
-| 全局变量 | grep 查找所有读写位置 |
-| 结构体字段 | LSP 或 grep "结构体->字段" |
-
 ## 轻量级预验证
 
-发现潜在漏洞时，**立即进行快速过滤**：
+发现潜在漏洞时，参考 `@skill:pre-validation-rules` 进行快速过滤。
 
-### 快速过滤条件（满足任一则不报告）
-
-| 条件 | 检查方法 |
-|------|----------|
-| 测试代码 | 文件路径包含 test/、mock/、example/ |
-| 编译时常量 | 参数为 sizeof()、#define 常量 |
-| 相邻边界检查 | ±5行内存在 if(len <)、if(size >) |
-| 死代码 | 位于 #if 0、#ifdef DEBUG 块中 |
-| 安全替代函数 | 已使用 strncpy、snprintf 等 |
+**只有通过预验证的漏洞才写入中间文件。**
 
 ## 输出格式
 
@@ -194,53 +145,13 @@ CWE: CWE-120
 
 ### 2. 跨模块数据流提示（重要）
 
-**标记可能流出/流入模块的数据**，供协调者进行跨模块分析：
-
-```
-=== 跨模块数据流提示 ===
-
-[OUT] 数据流出模块:
-  - src/ipc/handler.cpp:280 → DispatchRequest(request) 
-    数据: request 结构体
-    流向: 被其他模块调用
-
-[IN] 数据流入模块:
-  - src/ipc/server.cpp:50 ← InitServer(config)
-    数据: config 配置对象
-    来源: 来自 config 模块
-
-=== 结束 ===
-```
+**标记可能流出/流入模块的数据**，供协调者进行跨模块分析。格式参考 `@skill:cross-file-analysis` 中的跨模块数据流标记。
 
 ## 结构化输出（必须先写文件）
 
-扫描完成后，**首先**将所有漏洞详情写入 `{CONTEXT_DIR}/candidates_df_{模块简称}.json`，格式如下：
+扫描完成后，**首先**将所有漏洞详情写入 `{CONTEXT_DIR}/candidates_df_{模块简称}.json`。
 
-```json
-{
-  "module": "IPC通信模块",
-  "vulnerabilities": [
-    {
-      "id": "VULN-DF-IPC-001",
-      "type": "buffer_overflow",
-      "severity": "High",
-      "cwe": "CWE-120",
-      "file": "src/ipc/handler.cpp",
-      "line_start": 250,
-      "line_end": 255,
-      "function": "RecvMessage",
-      "code_snippet": "char buffer[256];\nrecv(sock, buffer, msg_len, 0);",
-      "data_flow": [
-        {"file": "src/ipc/handler.cpp", "line": 173, "description": "[SOURCE] accept() 接受连接"},
-        {"file": "src/ipc/handler.cpp", "line": 255, "description": "[SINK] 无边界检查"}
-      ],
-      "source_agent": "dataflow-scanner",
-      "source_module": "IPC通信模块",
-      "pre_validated": true
-    }
-  ]
-}
-```
+关于 JSON 格式详情，参考 `@skill:agent-communication` 中的模块中间文件 Schema。
 
 写入完成后，在返回文本中注明文件路径，例如：
 ```

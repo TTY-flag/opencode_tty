@@ -34,31 +34,28 @@
                           │
         ┌─────────────────┴─────────────────┐
         ▼                                   ▼
-┌───────────────────┐               ┌───────────────┐
-│ DataFlowScanner   │  ← 阶段2:     │SecurityAuditor│
-│   (协调者)        │    并行扫描   │ • 认证授权     │
-│                   │               │ • 密码学       │
-│ 输入:             │               │ • 跨文件追踪   │
-│ • project_model   │               │ • 预验证过滤   │
-│ • call_graph      │               │               │
-│                   │               │ 输入:         │
-│ ┌───────────────┐ │               │ • project_model│
-│ │ Module Scanner│ │               │ • call_graph  │
-│ │  (模块1)      │ │               │               │
-│ ├───────────────┤ │               │ 输出:         │
-│ │ Module Scanner│ │               │ • candidates  │
-│ │  (模块2)      │ │               │   _sec.json   │
-│ ├───────────────┤ │               └───────┬───────┘
-│ │ Module Scanner│ │                       │
-│ │  (模块N)      │ │                       │
-│ └───────────────┘ │                       │
-│ + 跨模块数据流分析│                       │
-│                   │                       │
-│ 输出: candidates  │                       │
-│       _df.json    │                       │
-└─────────┬─────────┘                       │
-          │                                 │
-          └─────────────────┬───────────────┘
+┌───────────────────┐               ┌───────────────────┐
+│ DataFlowScanner   │  ← 阶段2:     │ SecurityAuditor   │
+│   (协调者)        │    并行扫描   │   (协调者)         │
+│                   │               │                   │
+│ ┌───────────────┐ │               │ ┌───────────────┐ │
+│ │ Module Scanner│ │               │ │ Module Scanner│ │
+│ │  (模块1)      │ │               │ │  (模块1)      │ │
+│ ├───────────────┤ │               │ ├───────────────┤ │
+│ │ Module Scanner│ │               │ │ Module Scanner│ │
+│ │  (模块2)      │ │               │ │  (模块2)      │ │
+│ ├───────────────┤ │               │ ├───────────────┤ │
+│ │ Module Scanner│ │               │ │ Module Scanner│ │
+│ │  (模块N)      │ │               │ │  (模块N)      │ │
+│ └───────────────┘ │               │ └───────────────┘ │
+│ + 跨模块数据流分析│               │ + 跨模块安全分析  │
+│ + merge-json 合并 │               │ + merge-json 合并 │
+│                   │               │                   │
+│ 输出: candidates  │               │ 输出: candidates  │
+│       _df.json    │               │       _sec.json   │
+└─────────┬─────────┘               └─────────┬─────────┘
+          │                                   │
+          └─────────────────┬─────────────────┘
                             ▼
               ┌───────────────────────┐
               │     Verification      │  ← 阶段3: 漏洞验证
@@ -95,72 +92,16 @@
 
 ## Agent 输入输出详解
 
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                           数据流向图                                      │
-├──────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│  源代码 ──────────────────────────────────────────────────────────────┐  │
-│     │                                                                 │  │
-│     ▼                                                                 │  │
-│  ┌─────────────┐    project_model.json    ┌─────────────────────┐    │  │
-│  │ architecture│ ──────────────────────▶ │ dataflow-scanner    │    │  │
-│  │             │    call_graph.json       │     (协调者)         │    │  │
-│  │             │ ──────────────────────▶ │          │          │    │  │
-│  │             │                          │          ▼          │    │  │
-│  │             │                          │ ┌─────────────────┐ │    │  │
-│  │             │                          │ │ module-scanner  │ │    │  │
-│  │             │    project_model.json    │ │ (IPC模块)       │ │    │  │
-│  │             │ ──────────────────────▶ │ ├─────────────────┤ │    │  │
-│  │             │    call_graph.json       │ │ module-scanner  │ │    │  │
-│  │             │ ──────────────────────▶ │ │ (插件模块)      │ │    │  │
-│  └─────────────┘                          │ ├─────────────────┤ │    │  │
-│         │                                 │ │ module-scanner  │ │    │  │
-│         │    threat_analysis_report.md    │ │ (其他模块...)   │ │    │  │
-│         └──────────────────────────────▶ │ └─────────────────┘ │    │  │
-│                                           └──────────┬──────────┘    │  │
-│                                                      │               │  │
-│  ┌─────────────┐    project_model.json               │               │  │
-│  │ security-   │ ◀──────────────────────             │               │  │
-│  │ auditor     │    call_graph.json                  │               │  │
-│  │             │ ◀──────────────────────             │               │  │
-│  └──────┬──────┘                                     │               │  │
-│         │                                            │               │  │
-│         │    candidates_sec.json                      │               │  │
-│         └────────────────────┬───────────────────────┘               │  │
-│                    (candidates_df.json)                              │  │
-│                              ▼                                       │  │
-│                    ┌─────────────────┐                               │  │
-│                    │  verification   │                               │  │
-│                    │                 │                               │  │
-│                    │ candidates_df + │                               │  │
-│                    │ candidates_sec  │                               │  │
-│                    │       ▼         │                               │  │
-│                    │ verified.json   │                               │  │
-│                    └────────┬────────┘                               │  │
-│                             │                                        │  │
-│                             ▼                                        │  │
-│                    ┌─────────────────┐                               │  │
-│                    │    reporter     │                               │  │
-│                    │                 │                               │  │
-│                    │ verified.json   │                               │  │
-│                    │ project_model   │                               │  │
-│                    │       ▼         │                               │  │
-│                    │   report.md     │ ─────────────────────────────▶│  │
-│                    └─────────────────┘                      最终报告  │  │
-│                                                                      │  │
-└──────────────────────────────────────────────────────────────────────────┘
-```
-
 ### 各 Agent 输入输出一览
 
 | Agent | 输入 | 输出 | 说明 |
 |-------|------|------|------|
 | **orchestrator** | 用户指令 | `scan_log.json` | 协调全流程，记录扫描日志 |
 | **architecture** | 源代码 | `project_model.json`<br>`call_graph.json`<br>`threat_analysis_report.md` | 架构分析、威胁建模 |
-| **dataflow-scanner** | `project_model.json`<br>`call_graph.json` | `candidates_df.json` | 协调模块扫描 + 跨模块分析 |
-| **dataflow-module-scanner** | 模块文件列表<br>调用图子集 | 模块内漏洞<br>跨模块数据流提示 | 单模块污点分析（子Agent） |
-| **security-auditor** | `project_model.json`<br>`call_graph.json` | `candidates_sec.json` | 安全逻辑审计 |
+| **dataflow-scanner** | `project_model.json`<br>`call_graph.json` | `candidates_df.json` | 协调模块扫描 + 跨模块分析 + merge-json 合并 |
+| **dataflow-module-scanner** | 模块文件列表<br>调用图子集 | `candidates_df_{module}.json` | 单模块污点分析（子Agent） |
+| **security-auditor** | `project_model.json`<br>`call_graph.json` | `candidates_sec.json` | 协调模块审计 + 跨模块安全分析 + merge-json 合并 |
+| **security-module-scanner** | 模块文件列表<br>调用图子集 | `candidates_sec_{module}.json` | 单模块安全审计（子Agent） |
 | **verification** | `candidates_df.json`<br>`candidates_sec.json` | `verified.json` | 漏洞验证、置信度评分 |
 | **reporter** | `verified.json`<br>`project_model.json` | `report.md` | 生成最终报告 |
 
@@ -173,6 +114,8 @@
 - **LSP 优先**: 优先使用 LSP 进行代码分析，grep 作为回退方案
 - **反馈循环**: Verification 可请求 Scanner 补充分析（最多 2 次）
 - **评分规则可配置**: 置信度评分规则可通过 `scoring_rules.json` 自定义
+- **merge-json 工具合并**: 使用自定义 Tool 程序化合并 JSON，避免 LLM 输出限制
+- **模块化 Skill**: 知识型能力（污点规则、评分方法等）提取为独立 Skill，便于维护和扩展
 
 ## 快速开始
 
@@ -222,56 +165,78 @@ opencode
 | ---------------- | -------- | ---------------------------------- | ------------------------ |
 | orchestrator     | primary  | 协调整个扫描流程，记录扫描日志     | Tab 切换或 @orchestrator |
 | architecture     | subagent | 架构分析、威胁建模、LSP检测、调用图 | @architecture            |
-| dataflow-scanner | subagent | **协调者**：按模块调度子Agent + 跨模块分析 | @dataflow-scanner        |
+| dataflow-scanner | subagent | **协调者**：按模块调度子Agent + 跨模块分析 + merge-json 合并 | @dataflow-scanner        |
 | dataflow-module-scanner | subagent | 单模块污点分析 + 标记跨模块数据流 | 由 dataflow-scanner 调用 |
-| security-auditor | subagent | 认证/密码学审计、预验证过滤        | @security-auditor        |
+| security-auditor | subagent | **协调者**：按模块调度子Agent + 跨模块安全分析 + merge-json 合并 | @security-auditor        |
+| security-module-scanner | subagent | 单模块安全审计 + 标记跨模块安全提示 | 由 security-auditor 调用 |
 | verification     | subagent | 深度验证、置信度评分、反馈循环     | @verification            |
 | reporter         | subagent | 生成漏洞报告（与威胁报告分工）     | @reporter                |
 
-### DataFlow Scanner 层级架构
+### 层级架构
 
-为解决大项目上下文爆炸问题，`dataflow-scanner` 采用层级架构：
-
-```
-@dataflow-scanner (协调者)
-    │
-    ├── 读取 project_model.json 获取模块列表
-    │
-    ├── @dataflow-module-scanner (IPC通信模块)
-    │       └── 模块内污点分析 + 标记跨模块数据流
-    │
-    ├── @dataflow-module-scanner (插件系统模块)
-    │       └── 模块内污点分析 + 标记跨模块数据流
-    │
-    ├── @dataflow-module-scanner (其他模块...)
-    │       └── ...
-    │
-    ├── 收集所有模块的候选漏洞
-    │
-    └── 执行跨模块数据流分析
-            └── 匹配模块间的数据流出/流入点
-```
-
-**跨模块数据流提示格式**：
-
-子 Agent 使用 `[OUT]` 和 `[IN]` 标记数据流边界：
+DataFlow Scanner 和 Security Auditor 都采用层级架构解决大项目上下文爆炸问题：
 
 ```
-[OUT] 数据流出模块:
-  - src/ipc/handler.cpp:280 → DispatchRequest(request)
-    数据: request 结构体
-    流向: 被其他模块调用
-
-[IN] 数据流入模块:
-  - src/ipc/server.cpp:50 ← InitServer(config)
-    数据: config 配置对象
-    来源: 来自 config 模块
+@dataflow-scanner (协调者)                @security-auditor (协调者)
+    │                                         │
+    ├── 读取 project_model.json               ├── 读取 project_model.json
+    │                                         │
+    ├── @dataflow-module-scanner (模块1)      ├── @security-module-scanner (模块1)
+    │       └── 模块内污点分析                │       └── 模块内安全审计
+    │                                         │
+    ├── @dataflow-module-scanner (模块2)      ├── @security-module-scanner (模块2)
+    │       └── ...                           │       └── ...
+    │                                         │
+    ├── 收集所有模块的候选漏洞                ├── 收集所有模块的候选漏洞
+    │                                         │
+    ├── 执行跨模块数据流分析                  ├── 执行跨模块安全分析
+    │                                         │
+    └── merge-json 工具合并                   └── merge-json 工具合并
+        → candidates_df.json                      → candidates_sec.json
 ```
 
 **优势**：
 - 每个子 Agent 只处理一个模块，避免上下文爆炸
 - 模块内聚性好，分析更完整
 - 协调者负责跨模块分析，捕获模块边界漏洞
+- 使用 merge-json 工具程序化合并，避免 LLM 输出限制
+
+## Skill 说明
+
+知识型能力提取为独立 Skill，便于单模块优化和多语言扩展：
+
+| Skill | 路径 | 用途 | 引用者 |
+|-------|------|------|--------|
+| c-cpp-taint-tracking | `.opencode/skill/c-cpp-taint-tracking/` | 污点源/汇定义 | dataflow-module-scanner |
+| pre-validation-rules | `.opencode/skill/pre-validation-rules/` | 误报过滤规则 | 所有 Scanner |
+| confidence-scoring | `.opencode/skill/confidence-scoring/` | 置信度评分方法 | verification |
+| cross-file-analysis | `.opencode/skill/cross-file-analysis/` | 跨文件追踪方法 | architecture, 所有 Scanner, verification |
+| agent-communication | `.opencode/skill/agent-communication/` | 路径约定、JSON Schema | 所有 Agent |
+
+### 扩展新语言
+
+要支持新语言（如 Java），只需：
+1. 创建 `.opencode/skill/java-taint-tracking/SKILL.md`（定义 Java 的 Source/Sink）
+2. 在 `pre-validation-rules` 中添加语言特有过滤条件
+3. 修改 Scanner Agent 引用新的 Skill
+
+## 自定义 Tool 说明
+
+| Tool | 路径 | 用途 |
+|------|------|------|
+| merge-json | `.opencode/tool/merge-json.ts` | 合并多个 JSON 文件的数组字段 |
+
+### merge-json
+
+程序化合并多个 JSON 文件，避免 LLM 输出 token 限制。
+
+参数：
+- `directory`: 包含 JSON 文件的目录
+- `pattern`: 文件名匹配模式（如 `candidates_df_*.json`）
+- `output`: 合并后的输出文件路径
+- `key`: 要合并的数组字段名（默认 `vulnerabilities`）
+
+返回合并统计摘要，不返回完整内容。
 
 ## 检测能力
 
@@ -306,23 +271,9 @@ recv() [network.c]           ← 外部输入
       → strcpy() [request.c]  ← 漏洞点
 ```
 
-### LSP 可用性检测
-
-Architecture Agent 在分析开始前自动检测 LSP 是否可用：
-
-1. **测试方法**：对项目中任意 `.c` 或 `.cpp` 文件中的函数调用使用 `Go to Definition`
-2. **判断标准**：
-   - ✅ **LSP可用**：成功跳转到函数定义位置
-   - ❌ **LSP不可用**：无响应、超时、或返回错误
-3. **后续策略**：
-   - LSP 可用 → 优先使用 LSP，grep 作为补充验证
-   - LSP 不可用 → 完全使用 grep 回退方案
-
-检测结果记录到 `project_model.json` 的 `lsp_available` 字段，供后续 Agent 参考。
-
 ### 追踪能力
 
-每个 Agent 都具备：
+每个 Agent 都具备（详见 `@skill:cross-file-analysis`）：
 
 - LSP 优先的符号解析（Go to Definition / Find References）
 - grep 作为 LSP 不可用时的回退
@@ -334,36 +285,11 @@ Architecture Agent 在分析开始前自动检测 LSP 是否可用：
 
 ### 第一层：Scanner 预验证
 
-Scanner Agent 在发现漏洞时立即进行快速过滤，满足以下条件直接跳过：
-
-| 条件 | 检查方法 |
-|------|----------|
-| 测试代码 | 文件路径包含 test/、mock/、example/ |
-| 编译时常量 | 参数为 sizeof()、#define 常量 |
-| 相邻边界检查 | ±5行内存在 if(len <)、if(size >) |
-| 死代码 | 位于 #if 0、#ifdef DEBUG 块中 |
-| 安全替代函数 | 已使用 strncpy、snprintf 等 |
+详见 `@skill:pre-validation-rules`。
 
 ### 第二层：Verification 深度验证
 
-系统使用 0-100 的置信度评分：
-
-| 分数   | 等级           | 处理方式        |
-| ------ | -------------- | --------------- |
-| 80-100 | CONFIRMED      | ✅ 报告         |
-| 60-79  | LIKELY         | ✅ 报告         |
-| 40-59  | POSSIBLE       | ⚠️ 低优先级报告 |
-| 0-39   | FALSE_POSITIVE | ❌ 不报告       |
-
-**评分因素**：
-
-- 可达性（外部输入 +30 / 仅内部调用 +5 / 不可达 -30）
-- 数据可控性（完全可控 +25 / 部分可控 +15）
-- 缓解措施（边界检查 -15 / 输入验证 -20 / 数据清洗 -25）
-- 上下文（测试代码 -50 / static 函数 -15 / 常量参数 -20）
-- 跨文件（调用链完整 +0 / 有安全检查 -15 / 调用链断裂 -50）
-
-**评分规则可配置**：可通过 `{CONTEXT_DIR}/scoring_rules.json` 自定义评分规则。
+详见 `@skill:confidence-scoring`。
 
 ### 第三层：Reporter 去重
 
@@ -378,12 +304,6 @@ Verification ──NEED_MORE_INFO──▶ Orchestrator ──▶ Scanner
                                                       │
 Verification ◀──补充分析结果────── Orchestrator ◀─────┘
 ```
-
-**触发条件**：
-- 调用链不完整，需要中间函数的具体实现
-- 数据变换不明，需要中间函数对参数的处理逻辑
-- 缓解措施不确定，需要相关安全函数的调用情况
-- 全局变量来源不明，需要全局变量的所有写入位置
 
 **限制**：最多循环 2 次，避免无限递归。
 
@@ -418,20 +338,33 @@ Verification ◀──补充分析结果────── Orchestrator ◀─�
 ```
 your-project/
 ├── .opencode/
-│   └── agent/                      # Agent 定义
-│       ├── orchestrator.md         # 扫描协调者
-│       ├── architecture.md         # 架构分析
-│       ├── dataflow-scanner.md     # 数据流扫描协调者
-│       ├── dataflow-module-scanner.md  # 模块级扫描子Agent
-│       ├── security-auditor.md     # 安全审计
-│       ├── verification.md         # 漏洞验证
-│       └── reporter.md             # 报告生成
+│   ├── agent/                      # Agent 定义（9 个）
+│   │   ├── orchestrator.md         # 扫描协调者
+│   │   ├── architecture.md         # 架构分析
+│   │   ├── dataflow-scanner.md     # 数据流扫描协调者
+│   │   ├── dataflow-module-scanner.md  # 模块级扫描子Agent
+│   │   ├── security-auditor.md     # 安全审计协调者
+│   │   ├── security-module-scanner.md  # 模块级审计子Agent
+│   │   ├── verification.md         # 漏洞验证
+│   │   └── reporter.md             # 报告生成
+│   ├── skill/                      # Skill 定义（6 个）
+│   │   ├── agent-communication/    # Agent 间通信规范
+│   │   ├── c-cpp-taint-tracking/   # C/C++ 污点追踪规则
+│   │   ├── confidence-scoring/     # 置信度评分方法
+│   │   ├── cross-file-analysis/    # 跨文件分析方法
+│   │   ├── pre-validation-rules/   # 预验证/误报过滤
+│   │   └── bun-file-io/            # Bun 文件 I/O（内置）
+│   └── tool/                       # 自定义工具
+│       ├── merge-json.ts           # JSON 文件合并工具
+│       └── merge-json.txt          # 工具描述
 └── scan-results/                   # 扫描输出（自动创建）
     ├── .context/                   # 结构化上下文（Agent 间通信）
     │   ├── project_model.json      # 项目模型（architecture 输出）
     │   ├── call_graph.json         # 调用图（architecture 输出）
-    │   ├── candidates_df.json      # 数据流候选漏洞（dataflow-scanner 输出）
-    │   ├── candidates_sec.json     # 安全审计候选漏洞（security-auditor 输出）
+    │   ├── candidates_df.json      # 数据流候选漏洞（merge-json 合并）
+    │   ├── candidates_df_*.json    # 模块级数据流中间结果
+    │   ├── candidates_sec.json     # 安全审计候选漏洞（merge-json 合并）
+    │   ├── candidates_sec_*.json   # 模块级安全审计中间结果
     │   ├── verified.json           # 验证后漏洞（verification 输出）
     │   ├── scan_log.json           # 扫描日志（orchestrator 输出）
     │   └── scoring_rules.json      # 评分规则（可选，自定义置信度评分）
@@ -441,15 +374,13 @@ your-project/
 
 ### 路径约定
 
-扫描过程中使用以下路径变量：
+扫描过程中使用以下路径变量（详见 `@skill:agent-communication`）：
 
 | 变量 | 说明 | 确定方式 |
 |------|------|--------|
-| `PROJECT_ROOT` | 被扫描项目的根目录 | **必须由用户在提示词中明确指定**，不得使用当前工作目录代替 |
+| `PROJECT_ROOT` | 被扫描项目的根目录 | **必须由用户在提示词中明确指定** |
 | `SCAN_OUTPUT` | 扫描输出目录 | `{PROJECT_ROOT}/scan-results` |
 | `CONTEXT_DIR` | 上下文存储目录 | `{SCAN_OUTPUT}/.context` |
-
-Orchestrator 在初始化阶段创建目录并写入占位文件，调用子 Agent 时显式传递这三个路径。
 
 ## 适用场景
 

@@ -9,17 +9,7 @@ permission:
   list: allow
   lsp: allow
   edit: allow
-  webfetch: ask
   bash:
-    "mkdir *": allow
-    "find *": allow
-    "ls *": allow
-    "wc *": allow
-    "head *": allow
-    "tail *": allow
-    "cat *": allow
-    "grep *": allow
-    "xargs *": allow
     "*": allow
   todowrite: allow
   todoread: allow
@@ -43,6 +33,8 @@ permission:
 
 **路径由 Orchestrator 在调用时传递**，不要硬编码。
 
+关于路径约定的完整说明，参考 `@skill:agent-communication`。
+
 ### 接收路径
 协调者会在调用时传递：
 - **项目根目录** (`PROJECT_ROOT`): 源代码所在位置
@@ -62,45 +54,11 @@ permission:
 | 调用图 | `{CONTEXT_DIR}/call_graph.json` |
 | 威胁分析报告 | `{SCAN_OUTPUT}/threat_analysis_report.md` |
 
-## LSP使用说明
+## LSP 与跨文件分析
 
-你已启用LSP支持，**优先使用LSP进行代码分析**。
+关于 LSP 使用方法、可用性检测、跨文件追踪策略的完整说明，参考 `@skill:cross-file-analysis`。
 
-### LSP可用性检测（首先执行）
-
-在开始分析前，**必须先检测LSP是否正常工作**：
-
-1. **测试方法**：对项目中任意一个 `.c` 或 `.cpp` 文件中的函数调用使用 `Go to Definition`
-2. **判断标准**：
-   - ✅ **LSP可用**：成功跳转到函数定义位置
-   - ❌ **LSP不可用**：无响应、超时、或返回错误
-3. **后续策略**：
-   - LSP可用 → 优先使用LSP，grep作为补充验证
-   - LSP不可用 → 完全使用grep回退方案
-
-**将检测结果记录到 `project_model.json` 的 `lsp_available` 字段**，供后续Agent参考。
-
-### LSP操作优先级
-
-| 优先级 | 操作 | LSP功能 | 回退方案 |
-|--------|------|---------|----------|
-| 1 | 查找函数定义 | Go to Definition | grep "^函数名\s*(" |
-| 2 | 查找所有调用点 | Find References | grep "函数名\s*(" |
-| 3 | 获取符号类型 | Hover | 读取声明 |
-| 4 | 查找符号声明 | Go to Declaration | grep in .h files |
-
-### LSP使用流程
-
-1. **构建调用图时**：
-   - 对每个关键函数使用 `Find References` 获取所有调用位置
-   - 使用 `Go to Definition` 确认函数定义位置
-   - LSP能正确处理宏展开和条件编译
-
-2. **识别入口点时**：
-   - 对危险函数（recv, fopen, getenv）使用 `Find References`
-   - 追踪返回值的使用位置
-
-3. **回退到grep**：仅当LSP无响应或项目未配置时使用grep验证
+**将 LSP 检测结果记录到 `project_model.json` 的 `lsp_available` 字段**，供后续 Agent 参考。
 
 ## 接收输入
 
@@ -152,7 +110,7 @@ permission:
 
 ### 4. 跨文件调用分析（重要）
 
-**必须分析函数的跨文件调用关系：**
+**必须分析函数的跨文件调用关系**，详细方法参考 `@skill:cross-file-analysis`：
 
 1. **识别跨文件接口函数**
    - 非 static 函数（可被其他文件调用）
@@ -160,7 +118,6 @@ permission:
    - 被多个 .c 文件调用的函数
 
 2. **构建函数调用图**
-   - 使用 grep 搜索函数调用: `grep "函数名\s*(" *.c`
    - 追踪 caller → callee 关系
    - 特别关注处理外部输入的函数调用链
 
@@ -202,128 +159,49 @@ permission:
 |--------|----------|----------|----------|
 | 1 | src/network.c | Critical | 网络/通信 |
 | 2 | src/request.c | High | 协议解析 |
-| ... | ... | ... | ... |
 
 ## 入口点列表（外部输入位置）
 
 | 文件 | 行号 | 函数 | 入口类型 | 说明 |
 |------|------|------|----------|------|
 | src/server.c | 123 | handle_request() | 网络 | 接收HTTP请求 |
-| src/config.c | 45 | load_config() | 文件 | 读取配置文件 |
-| ... | ... | ... | ... | ... |
 
 ## 跨文件调用关系（关键）
 
 | 调用方文件 | 调用方函数 | 被调用文件 | 被调用函数 | 数据传递 |
 |------------|------------|------------|------------|----------|
 | server.c | handle_connection() | request.c | parse_request() | 传递socket数据 |
-| request.c | parse_request() | buffer.c | buffer_copy() | 传递请求体 |
-| request.c | parse_header() | auth.c | check_auth() | 传递认证头 |
-| ... | ... | ... | ... | ... |
-
-## 跨文件接口函数
-
-| 函数名 | 定义文件 | 被调用文件 | 功能 | 风险 |
-|--------|----------|------------|------|------|
-| parse_request() | request.c | server.c, proxy.c | 解析HTTP请求 | High |
-| buffer_copy() | buffer.c | request.c, response.c | 缓冲区复制 | High |
-| check_auth() | auth.c | request.c, admin.c | 认证检查 | Critical |
-| ... | ... | ... | ... | ... |
 
 ## 数据传递路径（从入口到敏感操作）
 
 | 入口点 | 传递路径 | 敏感操作 |
 |--------|----------|----------|
 | recv()@network.c:50 | network.c → request.c → buffer.c | strcpy()@buffer.c:120 |
-| fread()@config.c:30 | config.c → parse.c | system()@parse.c:80 |
-| ... | ... | ... |
 
 ## 模块风险评估
 
 | 模块 | 文件 | STRIDE 威胁 | 风险等级 |
 |------|------|-------------|----------|
 | 网络处理 | network.c | S,T,D,E | Critical |
-| 认证模块 | auth.c | S,T,E | Critical |
-| ... | ... | ... | ... |
 
 === 分析结束 ===
 ```
 
-**重要**：
-- 高风险文件列表是后续扫描 Agent 的主要输入
-- 入口点列表是污点追踪的起点
-- **跨文件调用关系**是追踪跨文件数据流的关键
-- **数据传递路径**帮助扫描 Agent 快速定位跨文件漏洞
-- 所有文件路径必须是相对于项目根目录的实际路径
-
 ## 结构化输出（必须在返回前完成）
 
-**完成分析后，必须按以下顺序写入三个文件，然后再结束任务。**
+**完成分析后，必须按以下顺序写入三个文件。**
+
+关于各文件的 JSON Schema 定义，参考 `@skill:agent-communication`。
 
 ### 第一步：写入 `{CONTEXT_DIR}/project_model.json`
 
-```json
-{
-  "project_name": "项目名称",
-  "scan_time": "2024-01-01T12:00:00Z",
-  "lsp_available": true,
-  "total_files": 50,
-  "total_lines": 25000,
-  "files": [
-    {
-      "path": "src/network.c",
-      "risk": "Critical",
-      "module": "network",
-      "lines": 450,
-      "priority": 1
-    }
-  ],
-  "entry_points": [
-    {
-      "file": "src/server.c",
-      "line": 89,
-      "function": "handle_request",
-      "type": "network",
-      "description": "接收HTTP请求"
-    }
-  ]
-}
-```
+包含 `project_name`、`scan_time`、`lsp_available`、`total_files`、`total_lines`、`modules`、`files`、`entry_points`、`attack_surfaces` 等字段。
 
 ### 第二步：写入 `{CONTEXT_DIR}/call_graph.json`
 
-```json
-{
-  "functions": {
-    "handle_request@src/server.c": {
-      "defined_at": 45,
-      "calls": ["parse_header@src/request.c", "validate@src/auth.c"],
-      "called_by": ["main@src/main.c"],
-      "receives_external_input": true,
-      "risk": "Critical"
-    },
-    "parse_header@src/request.c": {
-      "defined_at": 80,
-      "calls": ["strcpy@libc"],
-      "called_by": ["handle_request@src/server.c"],
-      "receives_external_input": true,
-      "risk": "High"
-    }
-  },
-  "data_flows": [
-    {
-      "source": "recv@src/network.c:50",
-      "path": ["handle_request@src/server.c:60", "parse_header@src/request.c:85"],
-      "sink": "strcpy@src/request.c:120",
-      "sink_type": "memory_operation"
-    }
-  ]
-}
-```
+包含 `functions`（函数节点及调用关系）和 `data_flows`（数据流路径）字段。
 
 ### 第三步：写入 `{SCAN_OUTPUT}/threat_analysis_report.md`
-
-生成独立的威胁分析报告，写入 `{SCAN_OUTPUT}/threat_analysis_report.md`。
 
 **只包含**：
 - 项目架构概览
@@ -336,11 +214,10 @@ permission:
 - 具体漏洞代码片段
 - 漏洞修复建议
 - 漏洞统计数据
-- 数据流路径详情
 
 ## 完成确认（必须执行）
 
-写完三个文件后，**必须逐一确认文件已成功写入磁盘**（通过读取文件或检查文件是否存在），然后向 Orchestrator 报告：
+写完三个文件后，**必须逐一确认文件已成功写入磁盘**，然后向 Orchestrator 报告：
 
 ```
 === Architecture 完成确认 ===

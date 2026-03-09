@@ -9,16 +9,7 @@ permission:
   list: allow
   lsp: allow
   edit: allow
-  webfetch: ask
   bash:
-    "find *": allow
-    "ls *": allow
-    "wc *": allow
-    "head *": allow
-    "tail *": allow
-    "cat *": allow
-    "grep *": allow
-    "xargs *": allow
     "*": allow
   task:
     "*": allow
@@ -31,6 +22,8 @@ permission:
 ## 路径约定
 
 **路径由 Orchestrator 在调用时传递**，不要硬编码。
+
+关于路径约定的完整说明，参考 `@skill:agent-communication`。
 
 ### 接收路径
 协调者会在调用时传递：
@@ -48,7 +41,7 @@ permission:
 ### 写入路径
 | 内容 | 路径 |
 |------|------|
-| 候选漏洞 | `{CONTEXT_DIR}/candidates_df.json` |
+| 候选漏洞 | `{CONTEXT_DIR}/candidates_df.json`（通过 `merge-json` 工具生成） |
 
 ### 传递给子 Agent
 调用 `@dataflow-module-scanner` 时，**必须传递路径上下文**：
@@ -71,7 +64,7 @@ dataflow-scanner (协调者 - 你)
     ├── @dataflow-module-scanner (模块1)
     ├── @dataflow-module-scanner (模块2)
     ├── @dataflow-module-scanner (模块N)
-    └── 跨模块数据流分析
+    └── 跨模块数据流分析 + merge-json 合并
 ```
 
 ## 核心职责
@@ -80,7 +73,7 @@ dataflow-scanner (协调者 - 你)
 2. **模块调度**: 为每个模块调用 `@dataflow-module-scanner`
 3. **结果收集**: 记录各模块写入的文件路径和跨模块提示（不在上下文中保存漏洞详情）
 4. **跨模块分析**: 分析模块间的数据流传递
-5. **输出合并**: 读取所有模块中间文件合并写入 `candidates_df.json`
+5. **输出合并**: 使用 `merge-json` 工具合并所有模块中间文件到 `candidates_df.json`
 
 ## 接收输入
 
@@ -165,16 +158,7 @@ dataflow-scanner (协调者 - 你)
 1. **写入文件路径**: 记录该模块写入的中间文件路径
 2. **跨模块提示**: 数据流出/流入点（体积小，可留在上下文中）
 
-**从返回文本中提取并记录**：
-
-```
-模块: [模块名]
-文件: {CONTEXT_DIR}/candidates_df_{模块简称}.json（Z 个漏洞）
-[OUT]: src/ipc/handler.cpp:250 → handle_request() 的 data 参数流向外部
-[IN]:  src/ipc/server.cpp:100 ← 接收来自 main 模块的配置
-```
-
-维护一个**模块文件路径列表**，用于阶段 6 读取合并：
+维护一个**模块文件路径列表**，用于阶段 6 合并：
 ```
 已完成模块文件:
 - {CONTEXT_DIR}/candidates_df_ipc.json
@@ -192,67 +176,29 @@ dataflow-scanner (协调者 - 你)
 2. **追踪跨模块路径**: 使用 `call_graph.json` 验证调用关系
 3. **识别跨模块漏洞**: 数据从模块 A 的 Source 流向模块 B 的 Sink
 
+将跨模块漏洞写入一个单独的中间文件 `{CONTEXT_DIR}/candidates_df_cross_module.json`，格式与模块中间文件一致，但增加 `cross_module: true` 和 `modules_involved` 字段。
+
+### 阶段 6: 使用 merge-json 工具合并输出
+
+**使用 `merge-json` 工具将所有模块中间文件合并为最终输出，不要手动拼接 JSON 内容。**
+
+调用方式：
+
 ```
-跨模块数据流示例:
-
-[模块: config] src/config/parser.cpp:50
-  → parse_config() 返回 config_path
-      ↓
-[模块: plugin] src/plugin/manager.cpp:88
-  → LoadPlugin(config_path) 
-      ↓
-  → dlopen(config_path)  ← SINK: 路径注入风险
-```
-
-### 阶段 6: 合并输出
-
-**通过读取文件合并**，而非依赖上下文中的漏洞详情：
-
-**步骤 1**：读取阶段 4 记录的所有模块中间文件，合并 `vulnerabilities` 数组：
-```
-读取: {CONTEXT_DIR}/candidates_df_ipc.json    → 提取 vulnerabilities[]
-读取: {CONTEXT_DIR}/candidates_df_plugin.json → 提取 vulnerabilities[]
-读取: {CONTEXT_DIR}/candidates_df_config.json → 提取 vulnerabilities[]
+使用 merge-json 工具:
+- directory: {CONTEXT_DIR}
+- pattern: candidates_df_*.json
+- output: {CONTEXT_DIR}/candidates_df.json
+- key: vulnerabilities
 ```
 
-**步骤 2**：将阶段 5 产生的跨模块漏洞条目追加到合并列表。
+工具会自动：
+1. 读取 `{CONTEXT_DIR}` 下所有匹配 `candidates_df_*.json` 的文件
+2. 合并各文件的 `vulnerabilities` 数组
+3. 写入 `{CONTEXT_DIR}/candidates_df.json`
+4. 返回合并统计（文件数、漏洞数）
 
-**步骤 3**：写入最终文件 `{CONTEXT_DIR}/candidates_df.json`：
-
-```json
-{
-  "vulnerabilities": [
-    {
-      "id": "VULN-DF-IPC-001",
-      "type": "buffer_overflow",
-      "severity": "High",
-      "cwe": "CWE-120",
-      "file": "src/ipc/handler.cpp",
-      "line_start": 250,
-      "line_end": 255,
-      "function": "RecvMessage",
-      "code_snippet": "...",
-      "data_flow": [...],
-      "source_agent": "dataflow-scanner",
-      "source_module": "IPC通信模块",
-      "pre_validated": true
-    },
-    {
-      "id": "VULN-DF-CROSS-001",
-      "type": "path_injection",
-      "severity": "High",
-      "cross_module": true,
-      "modules_involved": ["config", "plugin"],
-      "data_flow": [
-        {"file": "src/config/parser.cpp", "line": 50, "module": "config", "description": "[SOURCE] 配置文件读取"},
-        {"file": "src/plugin/manager.cpp", "line": 88, "module": "plugin", "description": "[SINK] dlopen 加载"}
-      ],
-      "source_agent": "dataflow-scanner",
-      "pre_validated": true
-    }
-  ]
-}
-```
+**不需要在对话中输出完整的合并 JSON 内容。**
 
 中间文件（`candidates_df_*.json`）保留在 `{CONTEXT_DIR}` 中，可用于调试和问题追溯。
 
@@ -279,3 +225,4 @@ dataflow-scanner (协调者 - 你)
 1. **不要直接扫描文件** - 你是协调者，具体扫描由子 Agent 完成
 2. **保持上下文精简** - 只传递必要信息给子 Agent
 3. **跨模块分析是你的核心价值** - 子 Agent 无法看到全局
+4. **使用 merge-json 工具合并** - 绝不手动拼接 JSON，避免输出过大失败

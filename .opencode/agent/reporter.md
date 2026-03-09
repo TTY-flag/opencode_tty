@@ -9,13 +9,7 @@ permission:
   list: allow
   lsp: allow
   edit: allow
-  webfetch: ask
   bash:
-    "find *": allow
-    "ls *": allow
-    "wc *": allow
-    "grep *": allow
-    "xargs *": allow
     "*": allow
   todowrite: allow
   todoread: allow
@@ -26,6 +20,8 @@ permission:
 ## 路径约定
 
 **路径由 Orchestrator 在调用时传递**，不要硬编码。
+
+关于路径约定的完整说明，参考 `@skill:agent-communication`。
 
 ### 接收路径
 协调者会在调用时传递：
@@ -64,28 +60,6 @@ permission:
 6. 生成报告
 ```
 
-### 攻击面数据来源
-
-从 `project_model.json` 读取以下字段用于攻击面分析：
-
-| 字段 | 说明 |
-|------|------|
-| `entry_points` | 外部输入入口点列表 |
-| `attack_surfaces` | 攻击面摘要列表 |
-
-示例：
-```json
-{
-  "entry_points": [
-    {"file": "src/ipc/handler.cpp", "function": "RecvMessage", "type": "network"}
-  ],
-  "attack_surfaces": [
-    "Unix Domain Socket: /opt/app/app.sock",
-    "动态库加载: dlopen()"
-  ]
-}
-```
-
 ## 核心职责
 
 1. **读取验证结果**: 从 verified.json 获取已验证的漏洞
@@ -116,8 +90,6 @@ permission:
 | 攻击面分析 | 安全加固建议（架构层面） |
 | 漏洞统计 | - |
 
-**注意**：不要在报告中重复架构描述或威胁建模内容。
-
 ## 代码可追溯性要求（重要）
 
 **报告中的所有代码必须是可追溯的：**
@@ -140,72 +112,25 @@ process_header(header);
 ```
 ````
 
-````
-
 ## 报告结构
 
 报告**只包含以下三个部分**：
 
 ### 1. 扫描摘要
 
-包含漏洞统计表格和 Top 5 关键漏洞列表：
-
-```markdown
-## 扫描摘要
-
-| 严重性 | 数量 |
-|--------|------|
-| Critical | X |
-| High | X |
-| Medium | X |
-| **总计** | X |
-
-### Top 5 关键漏洞
-
-1. [VULN-001] 命令注入 - `src/log/filesink.cpp:164`
-2. [VULN-002] 缺少认证 - `src/ipc/handler.cpp:173`
-3. ...
-```
+包含漏洞统计表格和 Top 5 关键漏洞列表。
 
 ### 2. 攻击面分析
 
-从 `project_model.json` 读取 `entry_points` 和 `attack_surfaces` 字段：
-
-```markdown
-## 攻击面分析
-
-| 入口点 | 类型 | 说明 |
-|--------|------|------|
-| /opt/app/app.sock | network | Unix Domain Socket |
-| dlopen() | file | 动态库加载 |
-| system() | command | 命令执行 |
-```
+从 `project_model.json` 读取 `entry_points` 和 `attack_surfaces` 字段。
 
 ### 3. 漏洞详情
 
 按严重性分组（Critical → High → Medium），每个漏洞包含：
-
-```markdown
-### [VULN-001] 漏洞标题
-
-**严重性**: Critical | **CWE**: CWE-XXX | **置信度**: XX/100
-
-**位置**: `src/module/file.c:156-160` @ `function_name()`
-
-**描述**: [一句话描述]
-
-**漏洞代码** (`src/module/file.c:156-160`)
-
-```c
-char header[64];
-strcpy(header, user_input);  // 漏洞点
-```
-
-**达成路径**
-
-1. `src/network.c:89` - recv() 接收网络数据
-2. `src/request.c:158` - strcpy() 无边界复制 [SINK]
-````
+- 严重性、CWE、置信度
+- 精确的文件路径和行号
+- 从实际文件读取的代码片段
+- 完整的达成路径
 
 ## 完整报告模板
 
@@ -230,9 +155,7 @@ strcpy(header, user_input);  // 漏洞点
 
 1. [VULN-001] 命令注入 - `src/log/filesink.cpp:164`
 2. [VULN-002] 缺少认证 - `src/ipc/handler.cpp:173`
-3. [VULN-003] 栈溢出 - `src/smap/module.cpp:427`
-4. [VULN-004] 路径遍历 - `src/plugin/manager.cpp:74`
-5. [VULN-005] 堆溢出 - `src/ipc/handler.cpp:259`
+3. ...
 
 ---
 
@@ -241,9 +164,6 @@ strcpy(header, user_input);  // 漏洞点
 | 入口点 | 类型 | 说明 |
 |--------|------|------|
 | /opt/app/app.sock | network | Unix Domain Socket 通信 |
-| dlopen() | file | 动态库加载 |
-| system() | command | 命令执行 |
-| 配置文件 | file | 配置解析 |
 
 ---
 
@@ -259,10 +179,10 @@ strcpy(header, user_input);  // 漏洞点
 
 **漏洞代码** (`src/log/filesink.cpp:164-168`)
 
-```c
+\```c
 std::string cmd = "tar -czf " + filename;
 system(cmd.c_str());  // 命令注入
-```
+\```
 
 **达成路径**
 
@@ -274,25 +194,17 @@ system(cmd.c_str());  // 命令注入
 ## High 漏洞
 
 ### [VULN-002] ...
-
----
-
-## Medium 漏洞
-
-（如有）
 ```
 
 ## 报告输出
 
 **输出路径**：`{SCAN_OUTPUT}/report.md`
 
-**输出格式**：纯 Markdown
-
 ### 漏洞分组规则
 
 1. 按严重性分组：Critical → High → Medium → Low
 2. 每组内按置信度降序排列
-3. 只报告置信度 ≥ 40 的漏洞（CONFIRMED、LIKELY、POSSIBLE）
+3. 只报告置信度 >= 40 的漏洞（CONFIRMED、LIKELY、POSSIBLE）
 
 ### 去重规则
 

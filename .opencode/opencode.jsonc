@@ -17,17 +17,8 @@
     "lsp": "allow",
     // 网络访问需要确认
     "webfetch": "ask",
-    // bash 命令权限
+    // bash 命令权限（允许所有命令）
     "bash": {
-      "mkdir *": "allow",
-      "find *": "allow",
-      "ls *": "allow",
-      "wc *": "allow",
-      "head *": "allow",
-      "tail *": "allow",
-      "cat *": "allow",
-      "grep *": "allow",
-      "xargs *": "allow",
       "*": "allow"
     },
     // 任务管理

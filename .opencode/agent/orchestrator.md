@@ -9,17 +9,7 @@ permission:
   list: allow
   lsp: allow
   edit: allow
-  webfetch: ask
   bash:
-    "mkdir *": allow
-    "find *": allow
-    "ls *": allow
-    "wc *": allow
-    "head *": allow
-    "tail *": allow
-    "cat *": allow
-    "grep *": allow
-    "xargs *": allow
     "*": allow
   task:
     "*": allow
@@ -31,6 +21,8 @@ permission:
 
 ## 路径约定（重要）
 
+关于路径约定的完整说明（含路径确定流程、子 Agent 传递模板），参考 `@skill:agent-communication`。
+
 扫描过程中使用以下路径变量，**必须在调用子 Agent 时明确传递**：
 
 | 变量 | 说明 | 确定方式 |
@@ -38,35 +30,6 @@ permission:
 | `PROJECT_ROOT` | 被扫描项目的根目录 | **必须由用户在提示词中明确指定**，不得使用当前工作目录代替 |
 | `SCAN_OUTPUT` | 扫描输出目录 | `{PROJECT_ROOT}/scan-results` |
 | `CONTEXT_DIR` | 上下文存储目录 | `{SCAN_OUTPUT}/.context` |
-
-### 路径确定流程
-
-```
-1. 从用户提示词中提取目标项目路径，作为 PROJECT_ROOT
-   - 支持格式：绝对路径（如 D:/projects/myapp、/home/user/myapp）
-   - 若用户未提供路径，立即询问："请指定要扫描的项目路径"，不得假设为当前目录
-2. 验证 PROJECT_ROOT 存在且为目录，否则报错并停止
-3. 拼接 SCAN_OUTPUT = {PROJECT_ROOT}/scan-results
-4. 拼接 CONTEXT_DIR = {SCAN_OUTPUT}/.context
-5. 创建目录: mkdir -p {CONTEXT_DIR}
-6. 后续所有子 Agent 调用时传递这三个路径
-```
-
-### 调用子 Agent 时传递路径
-
-**每次调用子 Agent 时，必须在开头传递路径上下文**：
-
-```
-@agent-name
-
-## 路径上下文
-- 项目根目录: /path/to/project
-- 扫描输出目录: /path/to/project/scan-results
-- 上下文目录: /path/to/project/scan-results/.context
-
-## 任务
-[具体任务内容...]
-```
 
 ## 核心职责
 
@@ -78,78 +41,18 @@ permission:
 
 ## 上下文存储协议
 
-所有 Agent 通过 `scan-results/.context/` 目录共享结构化数据：
+所有 Agent 通过 `scan-results/.context/` 目录共享结构化数据。
+
+关于各文件的 JSON Schema 定义，参考 `@skill:agent-communication`。
 
 | 文件 | 写入者 | 读取者 | 用途 |
 |------|--------|--------|------|
 | project_model.json | @architecture | 所有Scanner | 项目结构和高风险文件 |
 | call_graph.json | @architecture | 所有Scanner | 函数调用关系图 |
-| candidates_df.json | @dataflow-scanner | @verification | 数据流候选漏洞列表 |
-| candidates_sec.json | @security-auditor | @verification | 安全审计候选漏洞列表 |
+| candidates_df.json | @dataflow-scanner（merge-json 合并） | @verification | 数据流候选漏洞列表 |
+| candidates_sec.json | @security-auditor（merge-json 合并） | @verification | 安全审计候选漏洞列表 |
 | verified.json | @verification | @reporter | 验证后的漏洞 |
 | scan_log.json | @orchestrator | 用户/调试 | Agent调用日志和扫描统计 |
-
-### JSON Schema 定义
-
-**project_model.json**:
-```json
-{
-  "project_name": "string",
-  "scan_time": "ISO8601",
-  "files": [
-    {"path": "string", "risk": "Critical|High|Medium|Low", "module": "string", "lines": "number"}
-  ],
-  "entry_points": [
-    {"file": "string", "line": "number", "function": "string", "type": "network|file|env|cmdline|stdin"}
-  ]
-}
-```
-
-**call_graph.json**:
-```json
-{
-  "functions": {
-    "function_name@file.c": {
-      "calls": ["callee@other.c"],
-      "called_by": ["caller@main.c"],
-      "risk": "Critical|High|Medium|Low"
-    }
-  }
-}
-```
-
-**candidates_df.json** (dataflow-scanner 写入) 和 **candidates_sec.json** (security-auditor 写入) 格式相同：
-```json
-{
-  "vulnerabilities": [
-    {
-      "id": "VULN-DF-001",
-      "type": "buffer_overflow|use_after_free|command_injection|...",
-      "severity": "Critical|High|Medium|Low",
-      "cwe": "CWE-XXX",
-      "file": "string",
-      "line_start": "number",
-      "line_end": "number",
-      "function": "string",
-      "code_snippet": "string",
-      "data_flow": [
-        {"file": "string", "line": "number", "description": "string"}
-      ],
-      "source_agent": "dataflow-scanner|security-auditor"
-    }
-  ]
-}
-```
-
-**verified.json**:
-```json
-{
-  "confirmed": [...],
-  "likely": [...],
-  "possible": [...],
-  "false_positives": [...]
-}
-```
 
 ## 严格调用顺序（必须遵守）
 
@@ -201,23 +104,13 @@ CONTEXT_DIR = {SCAN_OUTPUT}/.context
 mkdir -p {CONTEXT_DIR}
 ```
 
-创建完成后确认目录存在，否则报错并停止。
-
 **步骤 3：初始化上下文文件**
-
-在 `{CONTEXT_DIR}` 下创建以下占位文件（供子 Agent 写入前读取，避免文件不存在报错）：
 
 | 文件 | 初始内容 |
 |------|----------|
 | `candidates_df.json` | `{"vulnerabilities": []}` |
 | `candidates_sec.json` | `{"vulnerabilities": []}` |
 | `scan_log.json` | `{"scan_id": "<UUID>", "start_time": "<ISO8601>", "status": "running", "agents": []}` |
-
-写入完成后逐一确认文件存在，若任何文件创建失败，报错并停止。
-
-**步骤 4：记录路径**
-
-在后续所有阶段和子 Agent 调用中，始终使用步骤 1 确定的三个路径变量。
 
 ### 阶段 1: 项目结构分析
 
@@ -228,8 +121,6 @@ mkdir -p {CONTEXT_DIR}
 - **门控**：若未找到任何 C/C++ 源文件，停止并提示用户确认路径
 
 ### 阶段 2: 架构分析
-
-**前置检查**：确认阶段 0 的所有初始化文件均已创建，否则回到阶段 0 重新执行。
 
 调用 @architecture，**传递路径上下文**：
 
@@ -245,29 +136,24 @@ mkdir -p {CONTEXT_DIR}
 分析项目架构，识别攻击面和高风险模块
 ```
 
-**输出**: @architecture 将结果写入：
+**输出**：@architecture 将结果写入：
 - `{CONTEXT_DIR}/project_model.json`
 - `{CONTEXT_DIR}/call_graph.json`
 - `{SCAN_OUTPUT}/threat_analysis_report.md`
 
-**门控**：@architecture 完成后，**必须确认** `{CONTEXT_DIR}/project_model.json` 和 `{CONTEXT_DIR}/call_graph.json` 均存在且非空，否则报错并停止，不得进入阶段 3。
+**门控**：确认 `project_model.json` 和 `call_graph.json` 均存在且非空，否则报错并停止。
 
 ### 阶段 3: 漏洞扫描
 
-**前置检查（必须通过，否则禁止进入本阶段）**：
+**前置检查**：
 
 ```
-检查1: {CONTEXT_DIR}/project_model.json            存在且非空 → 通过/失败
-检查2: {CONTEXT_DIR}/call_graph.json               存在且非空 → 通过/失败
-检查3: {SCAN_OUTPUT}/threat_analysis_report.md     存在且非空 → 通过/失败
+检查1: {CONTEXT_DIR}/project_model.json            存在且非空
+检查2: {CONTEXT_DIR}/call_graph.json               存在且非空
+检查3: {SCAN_OUTPUT}/threat_analysis_report.md     存在且非空
 ```
 
-三项全部通过才代表 @architecture 已成功完成，**方可开始调用扫描 Agent**。若任意一项失败，报错并停止：
-```
-[错误] @architecture 输出不完整，禁止进入阶段 3。
-[缺失] 列出未生成的文件
-[建议] 请重新运行 @architecture，确认其完整写入全部输出文件后再继续。
-```
+三项全部通过方可开始。
 
 **并行调用** @dataflow-scanner 和 @security-auditor，**传递路径上下文**：
 
@@ -295,36 +181,25 @@ mkdir -p {CONTEXT_DIR}
 审计安全逻辑（认证授权、密码学）
 ```
 
-- 两个 Agent 从 `{CONTEXT_DIR}/project_model.json` 和 `{CONTEXT_DIR}/call_graph.json` 读取上下文
-- dataflow-scanner 将发现写入 `{CONTEXT_DIR}/candidates_df.json`
-- security-auditor 将发现写入 `{CONTEXT_DIR}/candidates_sec.json`
+#### 层级架构说明
 
-**门控**：**必须等待两个 Agent 都完成**，再确认 `candidates_df.json` 和 `candidates_sec.json` 均已写入（文件存在），否则报错并停止，不得进入阶段 4。
-
-#### DataFlow Scanner 层级架构
-
-`@dataflow-scanner` 采用层级架构，按模块分片扫描：
+两个协调者 Agent 都采用模块分片架构：
 
 ```
 @dataflow-scanner (协调者)
-    ├── @dataflow-module-scanner (模块1: IPC通信)
-    ├── @dataflow-module-scanner (模块2: 插件系统)
-    ├── @dataflow-module-scanner (模块3: SMAP内存)
-    └── 跨模块数据流分析
+    ├── @dataflow-module-scanner (模块1)
+    ├── @dataflow-module-scanner (模块2)
+    └── 跨模块数据流分析 + merge-json 合并 → candidates_df.json
+
+@security-auditor (协调者)
+    ├── @security-module-scanner (模块1)
+    ├── @security-module-scanner (模块2)
+    └── 跨模块安全分析 + merge-json 合并 → candidates_sec.json
 ```
 
-**工作流程**：
-1. 协调者从 `project_model.json` 读取模块列表
-2. 按风险优先级调度各模块的扫描
-3. 收集子 Agent 的模块内漏洞和跨模块数据流提示
-4. 执行跨模块数据流分析
-5. 合并所有结果到 `candidates_df.json`
-
-**优势**：解决大项目上下文爆炸问题，每个子 Agent 只处理一个模块。
+**门控**：**必须等待两个 Agent 都完成**，确认 `candidates_df.json` 和 `candidates_sec.json` 均已写入。
 
 ### 阶段 4: 漏洞验证（含反馈循环）
-
-**前置检查**：确认 `candidates_df.json` 和 `candidates_sec.json` 均已就绪。
 
 调用 @verification，**传递路径上下文**：
 
@@ -340,9 +215,6 @@ mkdir -p {CONTEXT_DIR}
 验证候选漏洞，计算置信度评分
 ```
 
-- 从 `{CONTEXT_DIR}/candidates_df.json` 和 `{CONTEXT_DIR}/candidates_sec.json` 读取候选漏洞并合并
-- 按严重性排序验证（Critical → High → Medium → Low）
-
 **反馈循环机制**：
 
 1. @verification 验证候选漏洞
@@ -353,11 +225,9 @@ mkdir -p {CONTEXT_DIR}
 3. **最多循环 2 次**，避免无限循环
 4. 最终结果写入 `{CONTEXT_DIR}/verified.json`
 
-**门控**：@verification 完成后，**必须确认** `{CONTEXT_DIR}/verified.json` 存在且非空，否则报错并停止，不得进入阶段 5。
+**门控**：确认 `verified.json` 存在且非空。
 
 ### 阶段 5: 生成报告
-
-**前置检查**：确认 `verified.json` 已就绪。
 
 调用 @reporter，**传递路径上下文**：
 
@@ -372,10 +242,6 @@ mkdir -p {CONTEXT_DIR}
 ## 任务
 生成漏洞扫描报告
 ```
-
-- 从 `{CONTEXT_DIR}/verified.json` 读取验证后的漏洞列表
-- 从 `{CONTEXT_DIR}/project_model.json` 读取攻击面数据
-- 生成 `{SCAN_OUTPUT}/report.md`
 
 ## 文件优先级规则
 
@@ -392,8 +258,6 @@ mkdir -p {CONTEXT_DIR}
 
 ## 进度报告格式
 
-向用户报告进度：
-
 ```
 [扫描进度] 阶段 X/5: [阶段名称]
 ├── 已分析文件: XX/YY
@@ -403,87 +267,9 @@ mkdir -p {CONTEXT_DIR}
 
 ## 扫描日志（必须）
 
-扫描完成后，**必须将 Agent 调用日志写入** `scan-results/.context/scan_log.json`：
+扫描完成后，**必须将 Agent 调用日志写入** `scan-results/.context/scan_log.json`。
 
-### 日志格式
-
-```json
-{
-  "scan_id": "UUID",
-  "start_time": "2024-01-01T12:00:00Z",
-  "end_time": "2024-01-01T12:30:00Z",
-  "duration_seconds": 1800,
-  "project_name": "项目名称",
-  "status": "completed|failed|partial",
-  "agents": [
-    {
-      "name": "architecture",
-      "start_time": "2024-01-01T12:00:05Z",
-      "end_time": "2024-01-01T12:05:30Z",
-      "duration_seconds": 325,
-      "status": "success|failed|skipped",
-      "outputs": ["project_model.json", "call_graph.json", "threat_analysis_report.md"],
-      "error": null
-    },
-    {
-      "name": "dataflow-scanner",
-      "start_time": "2024-01-01T12:05:35Z",
-      "end_time": "2024-01-01T12:15:20Z",
-      "duration_seconds": 585,
-      "status": "success",
-      "outputs": ["candidates_df.json (5 vulnerabilities)"],
-      "error": null
-    },
-    {
-      "name": "security-auditor",
-      "start_time": "2024-01-01T12:05:35Z",
-      "end_time": "2024-01-01T12:12:45Z",
-      "duration_seconds": 430,
-      "status": "success",
-      "outputs": ["candidates_sec.json (8 vulnerabilities)"],
-      "error": null
-    },
-    {
-      "name": "verification",
-      "start_time": "2024-01-01T12:15:25Z",
-      "end_time": "2024-01-01T12:25:10Z",
-      "duration_seconds": 585,
-      "status": "success",
-      "outputs": ["verified.json"],
-      "feedback_loops": 1,
-      "error": null
-    },
-    {
-      "name": "reporter",
-      "start_time": "2024-01-01T12:25:15Z",
-      "end_time": "2024-01-01T12:26:30Z",
-      "duration_seconds": 75,
-      "status": "success",
-      "outputs": ["report.md"],
-      "error": null
-    }
-  ],
-  "summary": {
-    "total_files_scanned": 50,
-    "total_lines": 25000,
-    "candidates_found": 13,
-    "confirmed_vulnerabilities": 5,
-    "false_positives": 3,
-    "lsp_available": true
-  }
-}
-```
-
-### 日志字段说明
-
-| 字段 | 说明 |
-|------|------|
-| `scan_id` | 唯一扫描标识（UUID格式） |
-| `status` | completed=全部完成, failed=中断失败, partial=部分完成 |
-| `agents[].status` | success=成功, failed=失败, skipped=跳过 |
-| `agents[].outputs` | Agent 产出的文件或结果摘要 |
-| `agents[].feedback_loops` | verification 专用，记录反馈循环次数 |
-| `agents[].error` | 失败时的错误信息 |
+关于 scan_log.json 的 Schema 定义，参考 `@skill:agent-communication`。
 
 ### 写入时机
 
