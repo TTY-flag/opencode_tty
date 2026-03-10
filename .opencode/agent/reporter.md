@@ -54,11 +54,14 @@ permission:
 ```
 1. 读取 verified.json
 2. 提取 confirmed、likely、possible 三个数组
-3. 按严重性排序：Critical → High → Medium → Low
-4. 读取 project_model.json
-5. 提取 entry_points 和 attack_surfaces 字段
-6. 生成报告
+3. 按 verified_severity 分组：Critical → High → Medium → Low
+4. 每组内按 confidence 降序排列
+5. 读取 project_model.json
+6. 提取 entry_points 和 attack_surfaces 字段
+7. 生成报告
 ```
+
+**注意**：使用 `verified_severity`（验证后严重性）而非 `original_severity` 进行分组排序。
 
 ## 核心职责
 
@@ -126,8 +129,8 @@ process_header(header);
 
 ### 3. 漏洞详情
 
-按严重性分组（Critical → High → Medium），每个漏洞包含：
-- 严重性、CWE、置信度
+按 `verified_severity` 分组（Critical → High → Medium），每个漏洞包含：
+- 严重性（若经过重评估则标注原始值）、CWE、置信度
 - 精确的文件路径和行号
 - 从实际文件读取的代码片段
 - 完整的达成路径
@@ -171,7 +174,7 @@ process_header(header);
 
 ### [VULN-001] 命令注入 - CompressFile
 
-**严重性**: Critical | **CWE**: CWE-78 | **置信度**: 85/100
+**严重性**: Critical | **CWE**: CWE-78 | **置信度**: 85/100 | **来源**: dataflow-scanner, security-auditor
 
 **位置**: `src/log/filesink.cpp:164-168` @ `CompressFile()`
 
@@ -202,10 +205,18 @@ system(cmd.c_str());  // 命令注入
 
 ### 漏洞分组规则
 
-1. 按严重性分组：Critical → High → Medium → Low
-2. 每组内按置信度降序排列
+1. 按 `verified_severity` 分组：Critical → High → Medium → Low
+2. 每组内按 `confidence` 降序排列
 3. 只报告置信度 >= 40 的漏洞（CONFIRMED、LIKELY、POSSIBLE）
 
-### 去重规则
+### 严重性重评估标注
 
-如果同一位置（file + line_start）被多个 Agent 发现，只保留一条记录，取较高的置信度。
+当漏洞的 `original_severity` 与 `verified_severity` 不同时，在漏洞详情中标注：
+
+```markdown
+**严重性**: High（原评估: Critical → 验证后: High） | **CWE**: CWE-78 | **置信度**: 55/100
+```
+
+### 去重说明
+
+去重已在 Verification 阶段完成（按 `file + line_start + function` 三元组），Reporter 无需再做去重处理。`verified.json` 中的漏洞已经是唯一的。

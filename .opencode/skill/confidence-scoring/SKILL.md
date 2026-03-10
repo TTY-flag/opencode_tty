@@ -1,6 +1,6 @@
 ---
 name: confidence-scoring
-description: 漏洞置信度评分方法论。在验证候选漏洞时使用此 Skill 计算置信度分数并确定处理方式。
+description: 漏洞置信度评分方法论。在验证候选漏洞时使用此 Skill 计算置信度分数并确定处理方式。包含一票否决机制和多维度加法评分。
 ---
 
 ## Use this when
@@ -9,12 +9,39 @@ description: 漏洞置信度评分方法论。在验证候选漏洞时使用此 
 - 需要为漏洞计算置信度评分
 - 决定漏洞的报告级别（CONFIRMED / LIKELY / POSSIBLE / FALSE_POSITIVE）
 
-## 评分公式
+## 评分流程
+
+对每个候选漏洞，**先执行一票否决检查，通过后再执行加法评分**：
 
 ```
+[步骤 1: 一票否决检查]
+IF 任一否决条件命中 → confidence = 0, status = FALSE_POSITIVE, 跳过步骤 2
+
+[步骤 2: 加法评分]
 最终分 = base_score + reachability + controllability + mitigations + context + cross_file
 最终分 = max(0, min(100, 最终分))
 ```
+
+## 一票否决规则
+
+在加法评分**之前**执行。满足以下**任一条件**时，直接判定为 FALSE_POSITIVE（confidence = 0），无需进入加法评分：
+
+| 否决条件 | 触发判定 | 说明 |
+|---------|---------|------|
+| 调用链断裂 | `cross_file` 评估为 `chain_broken` | 调用链中某步函数不存在或签名不匹配，漏洞路径不成立 |
+| 不可达 | `reachability` 评估为 `unreachable`，且无备选外部输入路径 | 存在条件跳转/提前终止阻断，数据无法到达漏洞点 |
+| 测试代码 | `context` 评估为 `test_code` | 文件路径含 `test/`、`mock/`、`example/`，非生产代码 |
+
+被一票否决的漏洞在输出中标记 `veto_applied: true` 和 `veto_reason`。
+
+### 否决豁免
+
+以下情况即使匹配否决条件，仍需进入完整评分（不被否决）：
+
+| 豁免场景 | 原因 |
+|---------|------|
+| 测试代码中含 `if (DEBUG) skip_auth()` 模式 | 生产环境可能遗留 DEBUG 开关 |
+| 不可达路径由运行时配置控制 | 配置改变可能打开路径 |
 
 ## 默认评分规则
 
@@ -22,7 +49,7 @@ description: 漏洞置信度评分方法论。在验证候选漏洞时使用此 
 
 ```json
 {
-  "base_score": 50,
+  "base_score": 30,
   "reachability": {
     "direct_external": 30,
     "indirect_external": 20,
@@ -107,6 +134,18 @@ description: 漏洞置信度评分方法论。在验证候选漏洞时使用此 
 | 中间有数据清洗 | -20 | 数据在传递过程中被清洗 |
 | 调用链断裂 | -50 | 某一步的函数调用不存在或签名不匹配 |
 
+## base_score 设计说明
+
+`base_score = 30` 意味着候选漏洞需要积累足够的正面证据才能进入报告：
+
+| 场景 | 最终分 | 等级 |
+|------|--------|------|
+| 仅内部调用 + 无可控性 | 35 | FALSE_POSITIVE |
+| 直接外部输入 + 无可控性 | 60 | LIKELY |
+| 直接外部 + 完全可控 | 85 | CONFIRMED |
+| 直接外部 + 部分可控 + 有边界检查 | 60 | LIKELY |
+| 间接外部 + 部分可控 | 65 | LIKELY |
+
 ## 置信度等级与处理方式
 
 | 分数范围 | 等级 | 处理方式 |
@@ -118,13 +157,11 @@ description: 漏洞置信度评分方法论。在验证候选漏洞时使用此 
 
 ## 快速判定规则
 
-以下情况可直接判定为 FALSE_POSITIVE，无需完整评分：
+以下情况可直接判定为 FALSE_POSITIVE，无需完整评分（与一票否决互补）：
 
 - 使用编译时常量作为参数
 - 有明确且正确的边界检查保护
-- 测试文件中的代码（路径含 `test/`）
 - 死代码块（`#if 0`、`if(false)`）
-- 调用链中函数签名不匹配
 
 ## 评分输出格式
 
@@ -135,13 +172,27 @@ description: 漏洞置信度评分方法论。在验证候选漏洞时使用此 
   "id": "VULN-DF-001",
   "confidence": 85,
   "status": "CONFIRMED",
+  "veto_applied": false,
   "scoring_details": {
-    "base": 50,
+    "base": 30,
     "reachability": 30,
     "controllability": 15,
     "mitigations": -10,
     "context": 0,
     "cross_file": 0
   }
+}
+```
+
+被一票否决的漏洞格式：
+
+```json
+{
+  "id": "VULN-SEC-005",
+  "confidence": 0,
+  "status": "FALSE_POSITIVE",
+  "veto_applied": true,
+  "veto_reason": "chain_broken",
+  "scoring_details": null
 }
 ```

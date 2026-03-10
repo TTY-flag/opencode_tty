@@ -57,9 +57,10 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 | `candidates_df_*.json` | @dataflow-module-scanner | @dataflow-scanner | 模块级数据流扫描中间结果 |
 | `candidates_sec.json` | @security-auditor（通过 merge-json tool） | @verification | 安全审计候选漏洞列表 |
 | `candidates_sec_*.json` | @security-module-scanner | @security-auditor | 模块级安全审计中间结果 |
-| `verified.json` | @verification | @reporter | 验证后的漏洞 |
+| `verified.json` | @verification（通过 merge-json tool） | @reporter | 验证后的漏洞 |
+| `verified_*.json` | @verification-worker | @verification | 模块级验证中间结果 |
 | `scan_log.json` | @orchestrator | 用户/调试 | Agent 调用日志和扫描统计 |
-| `scoring_rules.json` | 用户（可选） | @verification | 自定义置信度评分规则 |
+| `scoring_rules.json` | 用户（可选） | @verification、@verification-worker | 自定义置信度评分规则 |
 
 ## JSON 格式规范（必须遵守）
 
@@ -221,24 +222,30 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 {
   "scan_summary": {
     "total_candidates": 25,
+    "deduplicated_candidates": 22,
     "confirmed": 5,
     "likely": 8,
     "possible": 4,
-    "false_positives": 8
+    "false_positives": 5,
+    "veto_count": 3
   },
   "confirmed": [
     {
       "id": "VULN-DF-001",
       "confidence": 85,
       "status": "CONFIRMED",
+      "original_severity": "Critical",
+      "verified_severity": "Critical",
+      "source_agents": ["dataflow-scanner", "security-auditor"],
       "scoring_details": {
-        "base": 50,
+        "base": 30,
         "reachability": 30,
         "controllability": 15,
         "mitigations": -10,
         "context": 0,
         "cross_file": 0
       },
+      "veto_applied": false,
       "original": {}
     }
   ],
@@ -247,13 +254,53 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
   "false_positives": [
     {
       "id": "VULN-SEC-003",
-      "confidence": 25,
+      "confidence": 0,
       "status": "FALSE_POSITIVE",
+      "original_severity": "Medium",
+      "verified_severity": "Medium",
+      "source_agents": ["security-auditor"],
+      "veto_applied": true,
+      "veto_reason": "test_code",
       "reason": "测试代码中的硬编码凭证"
     }
   ]
 }
 ```
+
+**字段说明**：
+
+| 字段 | 说明 |
+|------|------|
+| `original_severity` | Scanner 原始评估的严重性 |
+| `verified_severity` | 验证后根据置信度重评估的严重性 |
+| `source_agents` | 数组，记录发现该漏洞的 Scanner（去重合并后可能有多个来源） |
+| `veto_applied` | 布尔值，是否被一票否决（详见 `@skill:confidence-scoring`） |
+| `veto_reason` | 一票否决原因（仅 `veto_applied: true` 时存在）：`chain_broken`/`unreachable`/`test_code` |
+| `deduplicated_candidates` | 去重后的候选漏洞数（`scan_summary` 中） |
+| `veto_count` | 被一票否决的漏洞数（`scan_summary` 中） |
+
+### 验证中间文件（verified_{模块简称}.json）
+
+结构与 `verified.json` 一致，但 `scan_summary` 仅统计该批次的漏洞。
+
+```json
+{
+  "scan_summary": {
+    "total_candidates": 5,
+    "confirmed": 2,
+    "likely": 1,
+    "possible": 1,
+    "false_positives": 1,
+    "veto_count": 1
+  },
+  "confirmed": [],
+  "likely": [],
+  "possible": [],
+  "false_positives": []
+}
+```
+
+**模块简称规则**：取模块名的英文部分，全部小写，空格替换为 `_`。
 
 ### scan_log.json
 
@@ -273,7 +320,6 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
       "duration_seconds": 325,
       "status": "success|failed|skipped",
       "outputs": ["file1.json", "file2.md"],
-      "feedback_loops": 0,
       "error": null
     }
   ],

@@ -51,7 +51,8 @@ permission:
 | call_graph.json | @architecture | 所有Scanner | 函数调用关系图 |
 | candidates_df.json | @dataflow-scanner（merge-json 合并） | @verification | 数据流候选漏洞列表 |
 | candidates_sec.json | @security-auditor（merge-json 合并） | @verification | 安全审计候选漏洞列表 |
-| verified.json | @verification | @reporter | 验证后的漏洞 |
+| verified.json | @verification（merge-json 合并） | @reporter | 验证后的漏洞 |
+| verified_*.json | @verification-worker | @verification | 模块级验证中间结果 |
 | scan_log.json | @orchestrator | 用户/调试 | Agent调用日志和扫描统计 |
 
 ## 严格调用顺序（必须遵守）
@@ -273,7 +274,7 @@ mkdir -p {CONTEXT_DIR}
 
 **门控**：**必须等待两个 Agent 都完成**，确认 `candidates_df.json` 和 `candidates_sec.json` 均已写入。
 
-### 阶段 4: 漏洞验证（含反馈循环）
+### 阶段 4: 漏洞验证
 
 调用 @verification，**传递路径上下文**：
 
@@ -289,15 +290,12 @@ mkdir -p {CONTEXT_DIR}
 验证候选漏洞，计算置信度评分
 ```
 
-**反馈循环机制**：
+@verification 内部自主完成以下工作（无需 Orchestrator 干预）：
 
-1. @verification 验证候选漏洞
-2. 如果返回 `NEED_MORE_INFO`：
-   - 解析需要补充分析的漏洞 ID 和信息类型
-   - 调用相应的 Scanner Agent 补充分析特定代码路径
-   - 将补充结果传回 @verification
-3. **最多循环 2 次**，避免无限循环
-4. 最终结果写入 `{CONTEXT_DIR}/verified.json`
+1. 合并 `candidates_df.json` + `candidates_sec.json`，按 `(file, line_start, function)` 去重
+2. 按模块分批调度 `@verification-worker` 进行深度验证
+3. 收集各批次结果 + 跨模块漏洞路径验证
+4. 使用 merge-json 合并 → `verified.json`
 
 **门控**：确认 `verified.json` 存在且非空。
 
