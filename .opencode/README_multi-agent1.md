@@ -118,6 +118,7 @@
 - **三层误报过滤**: Scanner 预验证 → Verification 深度验证（含一票否决 + 去重） → Reporter 按 verified_severity 分组
 - **一票否决机制**: 调用链断裂、不可达、测试代码直接判定为 FALSE_POSITIVE
 - **严重性重评估**: Verification 根据置信度调整 Scanner 原始 severity
+- **分析人员约束**: 在项目根目录放置 `threat.md` 可预定义攻击面范围，约束 AI 分析路径，显著减少误报
 - **文档优先**: 架构分析优先读取项目文档，提高分析准确性
 - **代码可追溯**: 报告中所有漏洞都包含精确的文件路径和行号
 - **LSP 优先**: 优先使用 LSP 进行代码分析，grep 作为回退方案
@@ -372,6 +373,7 @@ Verification Worker → 发现调用链不完整
 
 ```
 your-project/
+├── threat.md（可选）            # 分析人员定义的攻击面约束，约束 AI 识别范围
 ├── .opencode/
 │   ├── agent/                      # Agent 定义（10 个）
 │   │   ├── orchestrator.md         # 扫描协调者
@@ -418,6 +420,70 @@ your-project/
 | `PROJECT_ROOT` | 被扫描项目的根目录 | **必须由用户在提示词中明确指定** |
 | `SCAN_OUTPUT` | 扫描输出目录 | `{PROJECT_ROOT}/scan-results` |
 | `CONTEXT_DIR` | 上下文存储目录 | `{SCAN_OUTPUT}/.context` |
+
+## threat.md 使用指南
+
+### 作用
+
+当 AI 自主分析时，可能识别出大量不合理的攻击入口，导致误报偏高。通过在项目根目录放置 `threat.md`，分析人员可以：
+
+1. **预定义关注的攻击入口** — 只扫描实际暴露的接口，忽略不相关的内部路径
+2. **指定威胁场景** — 聚焦特定类型的漏洞（如缓冲区溢出、命令注入），减少噪音
+3. **排除无关入口** — 明确告知 AI 哪些接口不需要扫描（如调试接口、测试桩）
+
+### 文件格式
+
+```markdown
+# 威胁分析约束
+
+## 关注的攻击入口
+
+- 网络接口: TCP 8080 端口，入口函数 `handle_request()` in `src/server.c`
+- 命令行参数: `main()` 中的 `argv` 处理
+- 配置文件解析: `parse_config()` in `src/config.c`
+
+## 关注的威胁场景
+
+- 缓冲区溢出（网络数据处理路径）
+- 命令注入（日志压缩模块）
+- 硬编码凭证（认证模块）
+
+## 排除的入口（不关注）
+
+- 内部 IPC 接口（仅进程内使用，不接受外部输入）
+- 调试接口（仅在 DEBUG 编译时启用，生产环境不存在）
+```
+
+三个部分均为**可选**，按需填写。未填写的部分 AI 将自主分析。
+
+### 使用建议
+
+| 场景 | 建议 |
+|------|------|
+| 首次扫描、摸底 | 不放置 `threat.md`，让 AI 自主发现所有潜在入口 |
+| 重点审计特定模块 | 在"关注的攻击入口"中只填写目标模块的接口 |
+| 减少已知误报 | 在"排除的入口"中填写上次扫描中确认为误报的路径 |
+| 对照已有威胁模型 | 将已有威胁模型的入口点抄录到文件中，确保覆盖 |
+
+### 工作原理
+
+```
+threat.md 存在                   threat.md 不存在
+     │                                  │
+     ▼                                  ▼
+约束模式：Architecture          自主分析模式：Architecture
+以 threat.md 定义的入口         自主扫描所有源文件
+为基础构建 entry_points         识别全部外部输入点
+     │                                  │
+     ▼                                  ▼
+project_model.json              project_model.json
+（entry_points 已收窄）         （entry_points 完整）
+     │                                  │
+     └────────────┬───────────────────┘
+                  ▼
+      DataFlowScanner / SecurityAuditor
+      （基于 entry_points 扫描）
+```
 
 ## 适用场景
 

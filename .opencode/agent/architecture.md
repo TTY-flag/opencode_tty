@@ -44,6 +44,7 @@ permission:
 ### 读取路径
 | 内容 | 路径 |
 |------|------|
+| 威胁约束（可选） | `{PROJECT_ROOT}/threat.md` |
 | 源代码 | `{PROJECT_ROOT}/src/...` |
 | 文档 | `{PROJECT_ROOT}/README.md`, `{PROJECT_ROOT}/doc/...` |
 
@@ -64,9 +65,37 @@ permission:
 
 从 Orchestrator 接收：
 - **路径上下文**：项目根目录、扫描输出目录、上下文目录
+- threat.md 状态（由 Orchestrator 检测后传递）
 - 源文件列表（可选，如未提供则自行扫描）
 
+## threat.md 约束文件（最优先读取）
+
+**在开始任何分析之前，首先检查 `{PROJECT_ROOT}/threat.md` 是否存在：**
+
+### 情况 A：文件存在（约束模式）
+
+读取 `threat.md` 内容，提取以下三类信息并用于约束后续所有分析：
+
+1. **关注的攻击入口**：作为 `project_model.json` 中 `entry_points` 的**基础集合**
+   - 仍可通过源码扫描发现文件中未明确提及但明显存在的入口，但优先以文件定义为准
+   - 不在列表中且 threat.md 明确排除的入口，不得写入 `entry_points`
+2. **关注的威胁场景**：仅对这些场景进行 STRIDE 建模，忽略与列表无关的场景
+3. **排除的入口**：从 `entry_points` 和 `attack_surfaces` 中明确排除这些路径，不得写入输出文件
+
+在 `threat_analysis_report.md` 顶部必须注明：
+
+```
+> **分析模式：threat.md 约束模式**
+> 本次攻击面分析基于 `threat.md` 中分析人员的预定义约束，识别范围已收窄。
+```
+
+### 情况 B：文件不存在（自主分析模式）
+
+跳过本节，直接进入下方"分析策略：文档优先"流程，AI 自主识别所有攻击面。
+
 ## 分析策略：文档优先
+
+> **前提条件**：仅当 `{PROJECT_ROOT}/threat.md` **不存在**时完整执行此节。若文件存在，攻击面识别以 threat.md 约束为准，本节流程仍可用于补充架构信息（目录结构、模块划分），但不得识别 threat.md 排除的入口点。
 
 **在开始源码分析之前，首先搜索并读取项目中的现有文档：**
 
@@ -229,6 +258,7 @@ permission:
 
 ```
 === Architecture 完成确认 ===
+✅ 分析模式: [threat.md 约束模式 / 自主分析模式]
 ✅ {CONTEXT_DIR}/project_model.json  已写入且校验通过（XX 个文件，XX 个模块，XX 个入口点）
 ✅ {CONTEXT_DIR}/call_graph.json     已写入且校验通过（XX 个函数节点）
 ✅ {SCAN_OUTPUT}/threat_analysis_report.md 已写入
