@@ -105,6 +105,18 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
   "lsp_available": true,
   "total_files": 50,
   "total_lines": 25000,
+  "project_profile": {
+    "project_type": "network_service|cli_tool|library|kernel_module|embedded|gui_application",
+    "deployment_model": "描述项目的典型部署方式（如：Linux 服务器上的守护进程、用户本地执行的命令行工具等）",
+    "trust_boundaries": [
+      {
+        "boundary": "信任边界名称（如 Network Interface）",
+        "trusted_side": "可信一侧（如 Application logic）",
+        "untrusted_side": "不可信一侧（如 Remote clients）",
+        "risk": "Critical|High|Medium|Low"
+      }
+    ]
+  },
   "modules": [
     {
       "name": "模块名称",
@@ -127,6 +139,8 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
       "line": 89,
       "function": "handle_request",
       "type": "network|file|env|cmdline|stdin",
+      "trust_level": "untrusted_network|untrusted_local|semi_trusted|trusted_admin|internal",
+      "justification": "TCP 0.0.0.0:8080 上的公网接口，远程客户端可直接连接",
       "description": "接收HTTP请求"
     }
   ],
@@ -136,6 +150,17 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
   ]
 }
 ```
+
+**新增字段说明**：
+
+| 字段 | 所属 | 说明 |
+|------|------|------|
+| `project_profile` | 顶层 | 项目定位信息，由 Architecture Agent 在攻击面识别前填写 |
+| `project_profile.project_type` | project_profile | 项目类型枚举：`network_service`（网络服务）、`cli_tool`（CLI 工具）、`library`（库）、`kernel_module`（内核模块）、`embedded`（嵌入式）、`gui_application`（GUI 应用） |
+| `project_profile.deployment_model` | project_profile | 项目的典型部署方式描述 |
+| `project_profile.trust_boundaries` | project_profile | 系统信任边界列表，标注每条边界两侧的信任差异 |
+| `trust_level` | entry_points[] | 入口点信任等级，决定该入口是否值得重点扫描 |
+| `justification` | entry_points[] | 入口点可达性理由，要求 AI 解释为什么此入口是真实攻击面 |
 
 ### call_graph.json
 

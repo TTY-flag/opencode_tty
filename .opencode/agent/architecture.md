@@ -120,15 +120,87 @@ permission:
 - 分析模块间的依赖关系（通过 #include 和函数调用）
 - 确定核心模块和辅助模块
 
-### 2. 攻击面识别
-识别所有外部输入入口点：
+### 2. 项目定位分析（攻击面识别前置步骤）
+
+**在识别攻击面之前，必须先完成项目定位分析，建立信任边界模型。此步骤决定了后续攻击面识别的范围和精度。**
+
+#### 第一步：确定项目类型
+
+通过 README、Makefile/CMakeLists.txt、main() 函数特征推断项目类型：
+
+| 项目类型 | 判断依据 | 典型攻击面 |
+|---------|---------|-----------|
+| 网络服务/守护进程 | listen()/accept()、systemd unit、daemon 化代码 | 网络入口为主，Critical |
+| CLI 工具 | main() 解析 argv、无长驻进程 | 命令行参数、stdin，Medium |
+| 库/SDK | 无 main()、导出 API、.so/.a 构建目标 | API 误用，需看调用方 |
+| 内核模块/驱动 | MODULE_LICENSE、ioctl | 系统调用接口，Critical |
+| 嵌入式固件 | 交叉编译、硬件寄存器操作 | 物理接口、串口，视场景 |
+| GUI 应用 | 窗口框架、事件循环 | 用户输入、文件打开，Medium |
+
+#### 第二步：建立信任边界
+
+识别系统中的信任边界，确定哪些数据来源是可信的、哪些不可信：
+
+| 信任等级 | 说明 | 举例 |
+|---------|------|------|
+| untrusted_network | 来自网络的不可信输入 | 远程客户端请求、HTTP body |
+| untrusted_local | 本地非特权用户的输入 | 命令行参数、stdin、用户可写文件 |
+| semi_trusted | 需要一定权限才能提供的输入 | 本地 Unix socket（需权限连接）、共享内存 |
+| trusted_admin | 管理员/部署人员控制的输入 | 安装时配置文件、由 systemd 注入的环境变量 |
+| internal | 程序内部生成的数据 | 硬编码常量、编译时生成 |
+
+#### 第三步：将信任等级映射到入口点
+
+扫描到候选入口点后，为每个入口点分配信任等级：
+- **untrusted_network / untrusted_local / semi_trusted** → 写入 `entry_points`，后续 Scanner 重点扫描
+- **trusted_admin** → 仅在该入口确实可被低权限用户间接影响时写入，否则排除
+- **internal** → 不写入 `entry_points`
+
+将项目定位结果写入 `project_model.json` 的 `project_profile` 字段（Schema 详见 `@skill:agent-communication`）。
+
+### 3. 攻击面识别（基于项目定位）
+
+**分两阶段执行：先扫描候选入口，再用项目定位过滤。**
+
+#### 阶段 A：扫描候选入口点
+
+使用以下模式识别所有潜在外部输入位置：
 - **网络入口**: socket, bind, listen, accept, recv, read on socket
 - **文件入口**: fopen, open, fread, read on file
 - **环境入口**: getenv, secure_getenv, environ
 - **命令行入口**: argc, argv, getopt
 - **用户输入**: scanf, gets, fgets from stdin
 
-### 3. 威胁建模 (STRIDE)
+#### 阶段 B：基于项目定位过滤
+
+对阶段 A 发现的每个候选入口点，必须回答以下三个问题：
+
+1. **攻击者可达性**：攻击者（非管理员/开发者）能否在正常部署中触达此入口？
+2. **数据可控性**：攻击者能否控制通过此入口传入的数据内容？
+3. **部署相关性**：此入口在项目的典型部署场景中是否启用？
+
+三个问题中**任一为"否"**，该入口点应被降级或排除。
+
+#### 常见降级/排除场景
+
+| 候选入口 | 排除条件 | 原因 |
+|---------|---------|------|
+| fopen() 读配置文件 | 路径硬编码为 /etc/xxx.conf | 文件由管理员控制，攻击者不可写 |
+| getenv() | 在 daemon 中由 systemd 注入 | 环境变量由启动脚本控制，非用户可控 |
+| recv() on Unix socket | socket 文件权限 0600 | 仅 owner 进程可连接 |
+| fopen() 读用户指定文件 | 路径来自 argv 或用户输入 | **保留**：用户可控 |
+| recv() on TCP 0.0.0.0 | 公网可达 | **保留**：攻击者可达 |
+| getenv() in CLI 工具 | 本地用户可设置 | **保留**：本地攻击者可控 |
+
+#### 入口点输出要求
+
+每个写入 `entry_points` 的入口点**必须附带**：
+- `trust_level`：信任等级（来自项目定位分析）
+- `justification`：简要说明为什么认为此入口是真实攻击面
+
+如果无法给出合理的 `justification`，不得将该入口写入 `entry_points`。
+
+### 4. 威胁建模 (STRIDE)
 对每个关键组件进行分析：
 - **Spoofing (欺骗)**: 身份伪造风险
 - **Tampering (篡改)**: 数据篡改风险
@@ -137,7 +209,7 @@ permission:
 - **Denial of Service (拒绝服务)**: 服务中断风险
 - **Elevation of Privilege (权限提升)**: 权限升级风险
 
-### 4. 跨文件调用分析（重要）
+### 5. 跨文件调用分析（重要）
 
 **必须分析函数的跨文件调用关系**，详细方法参考 `@skill:cross-file-analysis`：
 
@@ -191,9 +263,9 @@ permission:
 
 ## 入口点列表（外部输入位置）
 
-| 文件 | 行号 | 函数 | 入口类型 | 说明 |
-|------|------|------|----------|------|
-| src/server.c | 123 | handle_request() | 网络 | 接收HTTP请求 |
+| 文件 | 行号 | 函数 | 入口类型 | 信任等级 | 理由 | 说明 |
+|------|------|------|----------|----------|------|------|
+| src/server.c | 123 | handle_request() | 网络 | untrusted_network | TCP 0.0.0.0:8080 公网可达 | 接收HTTP请求 |
 
 ## 跨文件调用关系（关键）
 
@@ -224,7 +296,7 @@ permission:
 
 ### 第一步：写入 `{CONTEXT_DIR}/project_model.json`
 
-包含 `project_name`、`scan_time`、`lsp_available`、`total_files`、`total_lines`、`modules`、`files`、`entry_points`、`attack_surfaces` 等字段。
+包含 `project_name`、`scan_time`、`lsp_available`、`total_files`、`total_lines`、`project_profile`（项目类型、部署模型、信任边界）、`modules`、`files`、`entry_points`（含 `trust_level` 和 `justification`）、`attack_surfaces` 等字段。
 
 写入后调用 `validate-json` 工具校验：
 - PASS → 继续第二步
