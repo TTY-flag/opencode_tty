@@ -208,11 +208,20 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
       "source_agent": "dataflow-scanner|security-auditor",
       "source_module": "模块名称",
       "pre_validated": true,
-      "cross_module": false
+      "cross_module": false,
+      "modules_involved": ["模块A", "模块B"]
     }
   ]
 }
 ```
+
+**字段说明**：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `source_agent` | 是 | Scanner 输出时为字符串（`"dataflow-scanner"` 或 `"security-auditor"`）。Verification 去重合并后转为数组 `source_agents`（如 `["dataflow-scanner", "security-auditor"]`） |
+| `cross_module` | 是 | 是否为跨模块漏洞（默认 `false`） |
+| `modules_involved` | 否 | 仅 `cross_module: true` 时填写，列出涉及的所有模块名称 |
 
 ### 模块中间文件（candidates_df_{模块简称}.json / candidates_sec_{模块简称}.json）
 
@@ -239,9 +248,11 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 }
 ```
 
-**模块简称规则**：取模块名的英文部分，全部小写，空格替换为 `_`。
+**模块简称规则**：取模块名的英文部分，全部小写，空格替换为 `_`。若多个模块简称相同，追加数字后缀（如 `network`、`network_2`）。
 
 ### verified.json
+
+**统一使用 `vulnerabilities` 单数组结构**，每个条目通过 `status` 字段标识分类，便于 `merge-json` 工具一次合并。
 
 ```json
 {
@@ -254,7 +265,7 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
     "false_positives": 5,
     "veto_count": 3
   },
-  "confirmed": [
+  "vulnerabilities": [
     {
       "id": "VULN-DF-001",
       "confidence": 85,
@@ -271,12 +282,9 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
         "cross_file": 0
       },
       "veto_applied": false,
+      "veto_reason": null,
       "original": {}
-    }
-  ],
-  "likely": [],
-  "possible": [],
-  "false_positives": [
+    },
     {
       "id": "VULN-SEC-003",
       "confidence": 0,
@@ -284,9 +292,11 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
       "original_severity": "Medium",
       "verified_severity": "Medium",
       "source_agents": ["security-auditor"],
+      "scoring_details": null,
       "veto_applied": true,
       "veto_reason": "test_code",
-      "reason": "测试代码中的硬编码凭证"
+      "reason": "测试代码中的硬编码凭证",
+      "original": {}
     }
   ]
 }
@@ -296,6 +306,7 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 
 | 字段 | 说明 |
 |------|------|
+| `status` | 验证状态：`CONFIRMED`/`LIKELY`/`POSSIBLE`/`FALSE_POSITIVE` |
 | `original_severity` | Scanner 原始评估的严重性 |
 | `verified_severity` | 验证后根据置信度重评估的严重性 |
 | `source_agents` | 数组，记录发现该漏洞的 Scanner（去重合并后可能有多个来源） |
@@ -304,9 +315,11 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 | `deduplicated_candidates` | 去重后的候选漏洞数（`scan_summary` 中） |
 | `veto_count` | 被一票否决的漏洞数（`scan_summary` 中） |
 
+**设计说明**：使用统一的 `vulnerabilities` 数组（而非 `confirmed`/`likely`/`possible`/`false_positives` 四个独立数组），使得 `merge-json` 工具可以一次合并（key=`vulnerabilities`），合并后协调者只需遍历数组按 `status` 统计 `scan_summary`。
+
 ### 验证中间文件（verified_{模块简称}.json）
 
-结构与 `verified.json` 一致，但 `scan_summary` 仅统计该批次的漏洞。
+结构与 `verified.json` 一致，`scan_summary` 仅统计该批次的漏洞。
 
 ```json
 {
@@ -318,14 +331,18 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
     "false_positives": 1,
     "veto_count": 1
   },
-  "confirmed": [],
-  "likely": [],
-  "possible": [],
-  "false_positives": []
+  "vulnerabilities": [
+    {
+      "id": "VULN-DF-001",
+      "status": "CONFIRMED",
+      "confidence": 85,
+      "...": "..."
+    }
+  ]
 }
 ```
 
-**模块简称规则**：取模块名的英文部分，全部小写，空格替换为 `_`。
+**模块简称规则**：取模块名的英文部分，全部小写，空格替换为 `_`。若多个模块简称相同，追加数字后缀（如 `network`、`network_2`）。
 
 ### scan_log.json
 
@@ -349,6 +366,7 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
     }
   ],
   "summary": {
+    "project_type": "network_service|cli_tool|library|kernel_module|embedded|gui_application",
     "total_files_scanned": 50,
     "total_lines": 25000,
     "candidates_found": 13,

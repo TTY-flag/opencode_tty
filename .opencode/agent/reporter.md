@@ -53,15 +53,15 @@ permission:
 
 ```
 1. 读取 verified.json
-2. 提取 confirmed、likely、possible 三个数组
+2. 从 vulnerabilities 数组中过滤出 status 不为 FALSE_POSITIVE 且 confidence >= 40 的条目
 3. 按 verified_severity 分组：Critical → High → Medium → Low
 4. 每组内按 confidence 降序排列
 5. 读取 project_model.json
-6. 提取 entry_points 和 attack_surfaces 字段
+6. 提取 entry_points（含 trust_level 和 justification）和 attack_surfaces 字段
 7. 生成报告
 ```
 
-**注意**：使用 `verified_severity`（验证后严重性）而非 `original_severity` 进行分组排序。
+**注意**：使用 `verified_severity`（验证后严重性）而非 `original_severity` 进行分组排序。`verified.json` 使用统一的 `vulnerabilities` 数组，通过 `status` 字段区分分类。
 
 ## 核心职责
 
@@ -164,9 +164,9 @@ process_header(header);
 
 ## 攻击面分析
 
-| 入口点 | 类型 | 说明 |
-|--------|------|------|
-| /opt/app/app.sock | network | Unix Domain Socket 通信 |
+| 入口点 | 类型 | 信任等级 | 可达性理由 | 说明 |
+|--------|------|----------|-----------|------|
+| /opt/app/app.sock | network | untrusted_network | TCP 公网可达 | Unix Domain Socket 通信 |
 
 ---
 

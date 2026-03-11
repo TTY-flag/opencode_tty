@@ -167,13 +167,17 @@ dataflow-scanner (协调者 - 你)
   - file2.cpp (行数, 风险等级)
 
 ## 入口点（该模块相关）
-[从 project_model.json 的 entry_points 过滤出属于该模块的入口]
+[从 project_model.json 的 entry_points 过滤出属于该模块的入口，含 trust_level 和 justification]
+
+## 项目定位（来自 project_model.json）
+- 项目类型: [project_profile.project_type]
+- 部署模型: [project_profile.deployment_model]
 
 ## 调用图子集
 [从 call_graph.json 提取该模块内的函数调用关系]
 
 ## 扫描要求
-1. 在模块内进行完整的污点分析
+1. 在模块内进行完整的污点分析，优先扫描 trust_level 为 untrusted_network/untrusted_local 的入口
 2. 标记可能流出模块的数据（供跨模块分析）
 3. **将漏洞详情写入 `{CONTEXT_DIR}/candidates_df_{模块简称}.json`**
 4. 返回文本只包含：扫描统计、写入的文件路径、跨模块数据流提示（不含完整漏洞详情）
@@ -202,13 +206,15 @@ dataflow-scanner (协调者 - 你)
 
 ### 阶段 6: 跨模块数据流分析
 
-收集所有子 Agent 的跨模块提示后：
+收集所有子 Agent 的跨模块提示后，按以下步骤执行：
 
-1. **匹配流出/流入点**: 找到模块 A 的 OUT 对应模块 B 的 IN
-2. **追踪跨模块路径**: 使用 `call_graph.json` 验证调用关系
-3. **识别跨模块漏洞**: 数据从模块 A 的 Source 流向模块 B 的 Sink
+1. **收集所有 [OUT]/[IN] 标记**：从各子 Agent 返回文本和恢复的中间文件中提取跨模块数据流提示
+2. **匹配流出/流入对**：按函数名和参数类型匹配模块 A 的 `[OUT]` → 模块 B 的 `[IN]`
+3. **验证调用链**：使用 `call_graph.json` 确认跨模块调用关系存在（函数定义 + 调用点均存在）
+4. **追踪数据变换**：读取边界函数源码，检查参数在模块边界是否被清洗、截断或类型转换
+5. **构造跨模块漏洞**：将 Source（模块 A）→ Sink（模块 B）的完整路径记录为漏洞条目
 
-将跨模块漏洞写入一个单独的中间文件 `{CONTEXT_DIR}/candidates_df_cross_module.json`，格式与模块中间文件一致，但增加 `cross_module: true` 和 `modules_involved` 字段。
+将跨模块漏洞写入 `{CONTEXT_DIR}/candidates_df_cross_module.json`，格式与模块中间文件一致，但增加 `cross_module: true` 和 `modules_involved`（涉及的模块名称数组）字段。
 
 ### 阶段 7: 使用 merge-json 工具合并输出
 
@@ -229,6 +235,10 @@ dataflow-scanner (协调者 - 你)
 2. 合并各文件的 `vulnerabilities` 数组
 3. 写入 `{CONTEXT_DIR}/candidates_df.json`
 4. 返回合并统计（文件数、漏洞数）
+
+**合并后必须调用 `validate-json` 工具校验** `candidates_df.json`：
+- PASS → 校验通过，向 Orchestrator 报告完成
+- FAIL → 根据错误信息修复，重新写入并再次校验（最多重试 2 次）
 
 **不需要在对话中输出完整的合并 JSON 内容。**
 

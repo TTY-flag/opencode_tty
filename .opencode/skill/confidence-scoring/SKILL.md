@@ -96,6 +96,17 @@ IF 任一否决条件命中 → confidence = 0, status = FALSE_POSITIVE, 跳过�
 | 仅内部调用 | +5 | 函数仅被内部代码调用，无外部输入路径 |
 | 不可达 | -30 | 存在条件跳转阻断、`return`/`exit`/`abort` 提前终止、死代码 |
 
+**trust_level 辅助判定**：如果协调者传递了 `project_model.json` 中入口点的 `trust_level`，优先参考以下映射（避免重复分析项目定位阶段已得出的结论）：
+
+| trust_level | 对应可达性 | 评分 |
+|-------------|-----------|------|
+| `untrusted_network` | 直接外部输入 | +30 |
+| `untrusted_local` | 直接外部输入 | +30 |
+| `semi_trusted` | 间接外部输入 | +20 |
+| `trusted_admin` | 仅内部调用 | +5 |
+
+仅当入口点无 `trust_level` 标注时，按上方检查方法自行判定。
+
 ### 2. 数据可控性（Controllability）
 
 | 情况 | 评分 | 说明 |

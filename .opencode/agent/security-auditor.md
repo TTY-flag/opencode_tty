@@ -145,13 +145,17 @@ security-auditor (协调者 - 你)
   - file2.cpp (行数, 风险等级)
 
 ## 入口点（该模块相关）
-[从 project_model.json 的 entry_points 过滤出属于该模块的入口]
+[从 project_model.json 的 entry_points 过滤出属于该模块的入口，含 trust_level 和 justification]
+
+## 项目定位（来自 project_model.json）
+- 项目类型: [project_profile.project_type]
+- 部署模型: [project_profile.deployment_model]
 
 ## 调用图子集
 [从 call_graph.json 提取该模块内的函数调用关系]
 
 ## 审计要求
-1. 审查认证授权、密码学相关安全问题
+1. 审查认证授权、密码学相关安全问题，优先审计 trust_level 为 untrusted_network/untrusted_local 的入口关联代码
 2. 标记可能涉及跨模块的安全逻辑（认证绕过路径、凭证传递等）
 3. **将漏洞详情写入 `{CONTEXT_DIR}/candidates_sec_{模块简称}.json`**
 4. 返回文本只包含：审计统计、写入的文件路径、跨模块安全提示
@@ -177,12 +181,14 @@ security-auditor (协调者 - 你)
 
 ### 阶段 5: 跨模块安全分析
 
-收集所有子 Agent 的跨模块安全提示后：
+收集所有子 Agent 的跨模块安全提示后，按以下步骤执行：
 
-1. **认证完整性**: 检查所有入口点是否都经过认证，有无绕过路径
-2. **权限传递**: 检查权限检查是否在所有敏感操作前执行
-3. **凭证安全**: 检查密钥/令牌在模块间传递是否安全
-4. **降级攻击**: 检查是否存在安全等级降级的路径
+1. **收集所有 [AUTH_BYPASS]/[CREDENTIAL_FLOW] 标记**：从各子 Agent 返回文本和恢复的中间文件中提取跨模块安全提示
+2. **认证完整性分析**：检查所有入口点是否都经过认证——使用 `call_graph.json` 追踪从入口到敏感操作的路径，确认认证检查函数被调用
+3. **权限传递分析**：检查权限检查是否在所有敏感操作前执行，关注权限状态在模块间传递时是否被正确携带
+4. **凭证安全分析**：检查密钥/令牌在模块间传递是否安全——读取边界函数源码，确认凭证不通过全局变量或日志泄露
+5. **降级攻击分析**：检查是否存在从安全协议/算法回退到不安全版本的路径
+6. **构造跨模块漏洞**：将发现的跨模块安全问题记录为漏洞条目，标记 `cross_module: true` 和 `modules_involved`
 
 将跨模块安全漏洞写入 `{CONTEXT_DIR}/candidates_sec_cross_module.json`。
 
@@ -199,6 +205,10 @@ security-auditor (协调者 - 你)
 - output: {CONTEXT_DIR}/candidates_sec.json
 - key: vulnerabilities
 ```
+
+**合并后必须调用 `validate-json` 工具校验** `candidates_sec.json`：
+- PASS → 校验通过，向 Orchestrator 报告完成
+- FAIL → 根据错误信息修复，重新写入并再次校验（最多重试 2 次）
 
 **不需要在对话中输出完整的合并 JSON 内容。**
 

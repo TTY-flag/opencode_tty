@@ -11,8 +11,6 @@ permission:
   edit: allow
   bash:
     "*": allow
-  task:
-    "*": allow
   todowrite: allow
   todoread: allow
 ---

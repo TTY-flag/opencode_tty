@@ -115,6 +115,8 @@ permission:
 
 ## 核心能力
 
+> **约束模式说明**：无论 `threat.md` 是否存在，步骤 1（项目架构分析）和步骤 2（项目定位分析）**始终执行**——`project_profile` 信息对下游 Scanner 有独立价值，与 threat.md 不冲突。步骤 3（攻击面识别）在约束模式下以 threat.md 为准：跳过阶段 A（扫描候选入口），直接将 threat.md 定义的入口作为 `entry_points`，但仍执行阶段 B 的三问过滤和 `trust_level` 标注。
+
 ### 1. 项目架构分析
 - 识别项目的模块划分和组织结构
 - 分析模块间的依赖关系（通过 #include 和函数调用）

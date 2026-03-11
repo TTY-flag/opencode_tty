@@ -191,7 +191,7 @@ permission:
 
 ### 中间文件结构
 
-`verified_{批次简称}.json` 结构与最终 `verified.json` 一致：
+`verified_{批次简称}.json` 使用统一的 `vulnerabilities` 数组，每个条目通过 `status` 字段标识分类：
 
 ```json
 {
@@ -200,9 +200,10 @@ permission:
     "confirmed": 2,
     "likely": 1,
     "possible": 1,
-    "false_positives": 1
+    "false_positives": 1,
+    "veto_count": 1
   },
-  "confirmed": [
+  "vulnerabilities": [
     {
       "id": "VULN-DF-001",
       "confidence": 85,
@@ -219,12 +220,9 @@ permission:
         "cross_file": 0
       },
       "veto_applied": false,
+      "veto_reason": null,
       "original": {}
-    }
-  ],
-  "likely": [],
-  "possible": [],
-  "false_positives": [
+    },
     {
       "id": "VULN-SEC-003",
       "confidence": 0,
@@ -232,9 +230,11 @@ permission:
       "original_severity": "Medium",
       "verified_severity": "Medium",
       "source_agents": ["security-auditor"],
+      "scoring_details": null,
       "veto_applied": true,
       "veto_reason": "test_code",
-      "reason": "测试代码中的硬编码凭证"
+      "reason": "测试代码中的硬编码凭证",
+      "original": {}
     }
   ]
 }
@@ -242,9 +242,9 @@ permission:
 
 ### 写入说明
 
-1. 只有 `confirmed`、`likely`、`possible` 中的漏洞会被 Reporter 处理
-2. `false_positives` 记录但不报告，用于调优分析
-3. 每个漏洞保留完整的 `scoring_details` 便于追溯
+1. 所有漏洞放入统一的 `vulnerabilities` 数组，通过 `status` 字段区分类别
+2. `status` 为 `FALSE_POSITIVE` 的漏洞记录但不报告，用于调优分析
+3. 每个漏洞保留完整的 `scoring_details` 便于追溯（被一票否决的漏洞 `scoring_details` 为 `null`）
 4. `original` 字段保留 Scanner 输出的原始漏洞信息
 
 ## 返回给协调者的内容

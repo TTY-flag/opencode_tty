@@ -116,6 +116,7 @@
 
 - **项目定位分析**: Architecture Agent 先确定项目类型和信任边界，再基于可达性过滤攻击入口，避免不合理的入口识别
 - **跨文件分析**: 追踪跨越多个文件的数据流和调用链（至少 3 层深度）
+- **信任等级贯通**: 项目定位分析产出的 `trust_level` 传递到 Scanner 优先级排序和 Verification 可达性评分，避免信息断流
 - **三层误报过滤**: Scanner 预验证 → Verification 深度验证（含一票否决 + 去重） → Reporter 按 verified_severity 分组
 - **一票否决机制**: 调用链断裂、不可达、测试代码直接判定为 FALSE_POSITIVE
 - **严重性重评估**: Verification 根据置信度调整 Scanner 原始 severity
@@ -325,7 +326,7 @@ recv() [network.c]           ← 外部输入
 
 1. **去重**: Verification 协调者在合并候选漏洞后，按 `(file, line_start, function)` 三元组去重，避免同一漏洞被重复验证
 2. **一票否决**: 调用链断裂、不可达、测试代码直接判定为 FALSE_POSITIVE（confidence = 0），无需完整评分
-3. **多维度评分**: 通过可达性、可控性、缓解措施、上下文、跨文件五个维度量化评分（详见 `@skill:confidence-scoring`）
+3. **多维度评分**: 通过可达性（参考 `trust_level`）、可控性、缓解措施、上下文、跨文件五个维度量化评分（详见 `@skill:confidence-scoring`）
 
 ### 第三层：严重性重评估
 

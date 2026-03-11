@@ -203,10 +203,17 @@ verification (协调者 - 你)
 
 **使用 `merge-json` 工具将所有批次中间文件合并为最终输出，不要手动拼接 JSON 内容。**
 
-由于 `verified_*.json` 包含多个分类数组（`confirmed`、`likely`、`possible`、`false_positives`），需要分步合并：
+`verified_*.json` 使用统一的 `vulnerabilities` 数组结构，可以一次合并：
 
-1. 先对每个分类分别使用 merge-json 合并，或在合并后手动聚合 `scan_summary` 统计
-2. 最终写入 `{CONTEXT_DIR}/verified.json`
+```
+使用 merge-json 工具:
+- directory: {CONTEXT_DIR}
+- pattern: verified_*.json
+- output: {CONTEXT_DIR}/verified.json
+- key: vulnerabilities
+```
+
+合并完成后，读取 `verified.json` 中的 `vulnerabilities` 数组，按 `status` 字段统计生成 `scan_summary`（`confirmed`/`likely`/`possible`/`false_positives`/`veto_count` 各计数），将 `scan_summary` 写入 `verified.json` 顶部。
 
 **写入后必须调用 `validate-json` 工具校验**：
 - PASS → 校验通过，向 Orchestrator 报告完成
@@ -233,7 +240,7 @@ verification (协调者 - 你)
 ## 错误处理
 
 - 子 Agent 超时/失败 → 记录错误，继续下一个批次
-- 候选漏洞为空 → 生成空的 `verified.json`（各分类数组为空），正常完成
+- 候选漏洞为空 → 生成空的 `verified.json`（`vulnerabilities` 数组为空），正常完成
 - 模块分组过大（>15个漏洞）→ 考虑进一步按 severity 拆分
 
 ## 注意事项

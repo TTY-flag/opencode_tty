@@ -364,6 +364,8 @@ mkdir -p {CONTEXT_DIR}
 
 ## 错误处理
 
-- Agent 调用失败时，记录错误到 `scan_log.json` 并继续下一阶段
+- **串行阶段失败**（Architecture、Verification、Reporter）→ 记录错误到 `scan_log.json`，**停止流程并向用户报告**，不得跳过继续
+- **并行阶段一方失败**（DataFlowScanner 或 SecurityAuditor 其中一个）→ 记录错误，等另一方完成后，用已有的候选漏洞继续后续阶段
+- **并行阶段双方都失败** → 记录错误到 `scan_log.json`，停止流程并向用户报告
 - 无漏洞发现时，正常生成空报告
 - 大文件（>5000行）提示可能需要分块分析
