@@ -71,7 +71,7 @@ permission:
 阶段 4（@verification）
     ↓ 必须：vuln-db stats phase=verified 确认验证完成
 阶段 5（@reporter）
-    ↓ 完成：report.md 生成
+    ↓ 完成：report_confirmed.md + report_unconfirmed.md 生成
 ```
 
 **阶段门控规则**：
@@ -111,7 +111,7 @@ permission:
 │   └── vuln-db stats phase=verified 确认有验证数据 → 跳过阶段 4
 │
 └── reporter: status = "success"
-    └── report.md 存在 → 跳过阶段 5
+    └── report_confirmed.md 存在 → 跳过阶段 5
 ```
 
 ### 续扫判定规则
@@ -122,7 +122,7 @@ permission:
 | @dataflow-scanner | `scan_log.json` 中 status="success" **且** DB 中有 dataflow-scanner 候选数据 | 否则（协调者内部会检测模块级断点） |
 | @security-auditor | `scan_log.json` 中 status="success" **且** DB 中有 security-auditor 候选数据 | 否则（协调者内部会检测模块级断点） |
 | @verification | `scan_log.json` 中 status="success" **且** DB 中有 phase=verified 数据 | 否则 |
-| @reporter | `scan_log.json` 中 status="success" **且** `report.md` 存在 | 否则 |
+| @reporter | `scan_log.json` 中 status="success" **且** `report_confirmed.md` 存在 | 否则 |
 
 ### 续扫日志
 

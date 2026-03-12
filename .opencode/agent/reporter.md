@@ -40,24 +40,29 @@ permission:
 ### 写入路径
 | 内容 | 路径 |
 |------|------|
-| 漏洞报告 | `{SCAN_OUTPUT}/report.md` |
+| 已确认漏洞报告 | `{SCAN_OUTPUT}/report_confirmed.md` |
+| 待确认漏洞报告 | `{SCAN_OUTPUT}/report_unconfirmed.md` |
 
 ## 核心职责
 
-1. **程序化生成报告骨架**: 调用 `report-generator` 工具生成包含**所有**漏洞的完整报告
-2. **补充执行摘要**: 读取骨架后添加面向管理层的执行摘要段落
-3. **深度分析 Top 5**: 为最关键的 5 个漏洞从源代码读取上下文，补充深度分析
+1. **程序化生成两份报告骨架**: 调用 `report-generator` 工具，自动生成 `report_confirmed.md`（已确认漏洞）和 `report_unconfirmed.md`（待确认漏洞）
+2. **补充执行摘要**: 读取已确认报告骨架后添加面向管理层的执行摘要段落
+3. **深度分析 Top 5**: 为已确认报告中最关键的 5 个漏洞从源代码读取上下文，补充深度分析
 4. **添加修复建议**: 基于漏洞模式生成修复优先级建议
 
 ## 执行流程
 
-### 步骤 1: 调用 report-generator 生成完整报告骨架
+### 步骤 1: 调用 report-generator 生成两份报告骨架
 
 ```
 report-generator db_path={DB_PATH} project_model_path={CONTEXT_DIR}/project_model.json output_path={SCAN_OUTPUT}/report.md min_confidence=40 code_root={PROJECT_ROOT}
 ```
 
-工具会从 SQLite 数据库查询所有 `phase=verified AND status != FALSE_POSITIVE AND confidence >= 40` 的漏洞，程序化生成：
+工具会自动生成两份报告：
+- `{SCAN_OUTPUT}/report_confirmed.md` — 仅 CONFIRMED 状态的漏洞
+- `{SCAN_OUTPUT}/report_unconfirmed.md` — LIKELY / POSSIBLE 状态的漏洞
+
+每份报告均包含：
 - 扫描摘要（严重性分布、验证状态分布）
 - Top 10 关键漏洞
 - 攻击面分析（从 project_model.json）
@@ -67,13 +72,13 @@ report-generator db_path={DB_PATH} project_model_path={CONTEXT_DIR}/project_mode
 
 **所有统计数据由 SQL 精确计算，确保报告内各表格数据一致。**
 
-### 步骤 2: 读取骨架报告
+### 步骤 2: 读取已确认报告骨架
 
-读取 `{SCAN_OUTPUT}/report.md` 了解内容结构。
+读取 `{SCAN_OUTPUT}/report_confirmed.md` 了解内容结构。
 
 ### 步骤 3: 补充执行摘要
 
-在报告 `# 漏洞扫描报告` 标题和 `## 1. 扫描摘要` 之间，插入一段"执行摘要"：
+在已确认报告 `# 漏洞扫描报告 — 已确认漏洞` 标题和 `## 1. 扫描摘要` 之间，插入一段"执行摘要"：
 
 ```markdown
 ## 执行摘要
@@ -84,9 +89,9 @@ report-generator db_path={DB_PATH} project_model_path={CONTEXT_DIR}/project_mode
 - 建议的优先修复方向
 ```
 
-### 步骤 4: 为 Top 5 漏洞补充深度分析
+### 步骤 4: 为已确认报告 Top 5 漏洞补充深度分析
 
-从 Top 10 列表中选择前 5 个最关键的漏洞，**从源代码文件中读取相关代码**，在该漏洞的详情段落后追加深度分析：
+从已确认报告 Top 10 列表中选择前 5 个最关键的漏洞，**从源代码文件中读取相关代码**，在该漏洞的详情段落后追加深度分析：
 
 ```markdown
 **深度分析**
@@ -99,7 +104,7 @@ report-generator db_path={DB_PATH} project_model_path={CONTEXT_DIR}/project_mode
 
 ### 步骤 5: 添加修复建议章节
 
-在报告末尾（CWE 分布之后）添加：
+在已确认报告末尾（CWE 分布之后）添加：
 
 ```markdown
 ## 修复建议
@@ -157,3 +162,4 @@ report-generator db_path={DB_PATH} project_model_path={CONTEXT_DIR}/project_mode
 2. **专注于增值内容** - 执行摘要、深度分析、修复建议是你的核心价值
 3. **保持数据一致** - 不要手动修改统计数字，它们由 SQL 精确计算
 4. **只为 Top 5 补充深度分析** - 不需要对所有漏洞都读取源代码
+5. **待确认报告无需补充** - `report_unconfirmed.md` 由工具生成后即完成，不需要额外补充分析

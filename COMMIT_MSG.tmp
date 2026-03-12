@@ -1,6 +1,6 @@
-refactor: simplify data_flow field from JSON array to plain text
+feat: split report into confirmed and unconfirmed variants
 
-- Remove JSON serialize/deserialize logic for data_flow in vuln-db.ts
-- Simplify formatDataFlow in report-generator.ts to return raw string
-- Update schema docs and insert examples to use free-text format
-- Clean up comparison language ("不再", "替代之前") from agent/skill prompts
+report-generator now produces two separate reports:
+- report_confirmed.md: only CONFIRMED vulnerabilities
+- report_unconfirmed.md: LIKELY/POSSIBLE vulnerabilities
+Update reporter agent, orchestrator, and skill docs accordingly.
