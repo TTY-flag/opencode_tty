@@ -205,7 +205,7 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 
 ### 漏洞数据（数据库）
 
-候选漏洞和验证结果存储在 SQLite 数据库中，不再使用 JSON 文件。
+候选漏洞和验证结果存储在 SQLite 数据库中。
 
 关于数据库 Schema、字段说明、以及 `vuln-db` 工具的使用方式，参考 `@skill:vulnerability-db`。
 

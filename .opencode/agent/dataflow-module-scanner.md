@@ -165,7 +165,7 @@ vuln-db command=insert db_path={DB_PATH} vulnerabilities='[
     "function": "RecvMessage",
     "description": "...",
     "code_snippet": "...",
-    "data_flow": [...],
+    "data_flow": "src/ipc/channel.cpp:100 RecvRawData() [SOURCE]\nsrc/ipc/handler.cpp:250 RecvMessage() [SINK]",
     "pre_validated": true
   }
 ]'

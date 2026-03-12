@@ -140,10 +140,7 @@ vuln-db command=insert db_path={DB_PATH} vulnerabilities='[
     "function": "check_password",
     "description": "...",
     "code_snippet": "const char *admin_password = \"admin123\";",
-    "data_flow": [
-      {"file": "src/auth/login.c", "line": 30, "description": "check_password() 入口"},
-      {"file": "src/auth/login.c", "line": 45, "description": "硬编码密码比较"}
-    ],
+    "data_flow": "src/auth/login.c:30 check_password() 入口\nsrc/auth/login.c:45 硬编码密码比较",
     "pre_validated": true
   }
 ]'

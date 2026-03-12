@@ -79,15 +79,7 @@ function parseJsonField(val: string | null): unknown {
 
 function formatDataFlow(raw: string | null): string {
   if (!raw) return ""
-  const parsed = parseJsonField(raw)
-  if (!Array.isArray(parsed)) return raw
-  return parsed
-    .map((step: { file?: string; line?: number; description?: string }, i: number) => {
-      const loc = step.file ? `\`${step.file}${step.line ? ":" + step.line : ""}\`` : ""
-      const desc = step.description ?? ""
-      return `${i + 1}. ${loc} - ${desc}`
-    })
-    .join("\n")
+  return raw
 }
 
 function formatSourceAgents(raw: string | null): string {

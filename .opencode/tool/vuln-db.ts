@@ -143,7 +143,7 @@ function handleInsert(dbPath: string, vulnsJson: string): string {
           $line_end: v.line_end ?? null,
           $function_name: v.function ?? v.function_name ?? null,
           $code_snippet: v.code_snippet ?? null,
-          $data_flow: typeof v.data_flow === "string" ? v.data_flow : v.data_flow ? JSON.stringify(v.data_flow) : null,
+          $data_flow: v.data_flow ?? null,
           $pre_validated: v.pre_validated ? 1 : 0,
           $cross_module: v.cross_module ? 1 : 0,
           $modules_involved: Array.isArray(v.modules_involved) ? JSON.stringify(v.modules_involved) : v.modules_involved ?? null,
@@ -209,7 +209,7 @@ function handleQuery(db: Database, args: Record<string, unknown>): string {
   const rows = db.prepare(sql).all(params)
 
   for (const row of rows as Record<string, unknown>[]) {
-    for (const key of ["data_flow", "modules_involved", "scoring_details", "source_agents", "mitigations_found"]) {
+    for (const key of ["modules_involved", "scoring_details", "source_agents", "mitigations_found"]) {
       if (typeof row[key] === "string") {
         try {
           row[key] = JSON.parse(row[key] as string)

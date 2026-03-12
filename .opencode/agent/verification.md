@@ -41,7 +41,7 @@ permission:
 | 评分规则 | `{CONTEXT_DIR}/scoring_rules.json`（可选） |
 
 ### 数据写入
-验证结果通过 `vuln-db batch-update` 工具写入数据库，不再写入 JSON 中间文件。
+验证结果通过 `vuln-db batch-update` 工具写入数据库。
 
 关于数据库 Schema 和工具用法，参考 `@skill:vulnerability-db`。
 
@@ -233,4 +233,4 @@ vuln-db command=log db_path={DB_PATH} agent_name=verification status=success mes
 2. **保持上下文精简** - 只传递漏洞 ID 列表给子 Agent，不在协调者上下文中保存漏洞详情
 3. **去重是你的核心价值之一** - 调用 `vuln-db dedup` 确保同一漏洞不被重复验证
 4. **跨模块验证是你的另一核心价值** - 子 Agent 无法看到全局，跨模块调用链由你验证
-5. **使用 vuln-db 工具** - 所有漏洞数据通过数据库读写，不再使用 JSON 中间文件
+5. **使用 vuln-db 工具** - 所有漏洞数据通过数据库读写

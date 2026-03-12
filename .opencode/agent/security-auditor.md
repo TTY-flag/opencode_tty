@@ -40,7 +40,7 @@ permission:
 | 源代码 | `{PROJECT_ROOT}/...` |
 
 ### 数据写入
-候选漏洞通过 `vuln-db insert` 工具写入 SQLite 数据库（`{DB_PATH}`），不再写入 JSON 文件。
+候选漏洞通过 `vuln-db insert` 工具写入 SQLite 数据库（`{DB_PATH}`）。
 
 关于数据库 Schema 和工具用法，参考 `@skill:vulnerability-db`。
 
@@ -226,4 +226,4 @@ vuln-db command=log db_path={DB_PATH} agent_name=security-auditor status=success
 1. **不要直接审计文件** - 你是协调者，具体审计由子 Agent 完成
 2. **保持上下文精简** - 只传递必要信息给子 Agent
 3. **跨模块安全分析是你的核心价值** - 认证绕过路径常跨越多个模块
-4. **使用 vuln-db 工具** - 所有漏洞数据通过数据库读写，不再使用 JSON 中间文件
+4. **使用 vuln-db 工具** - 所有漏洞数据通过数据库读写
