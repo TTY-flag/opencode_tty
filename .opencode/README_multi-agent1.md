@@ -49,17 +49,17 @@
 │ │  (模块N)      │ │               │ │  (模块N)      │ │
 │ └───────────────┘ │               │ └───────────────┘ │
 │ + 跨模块数据流分析│               │ + 跨模块安全分析  │
-│ + merge-json 合并 │               │ + merge-json 合并 │
+│ + vuln-db insert  │               │ + vuln-db insert  │
 │                   │               │                   │
-│ 输出: candidates  │               │ 输出: candidates  │
-│       _df.json    │               │       _sec.json   │
+│ 输出: scan.db     │               │ 输出: scan.db     │
+│  (候选漏洞入库)   │               │  (候选漏洞入库)   │
 └─────────┬─────────┘               └─────────┬─────────┘
           │                                   │
           └─────────────────┬─────────────────┘
                             ▼
               ┌───────────────────────┐
               │  Verification (协调者) │  ← 阶段3: 漏洞验证
-              │   • 合并 + 去重        │
+              │   • vuln-db dedup     │
               │   • 一票否决过滤       │
               │   • 置信度评分         │
               │   • 严重性重评估       │
@@ -72,21 +72,21 @@
               │ │  (模块N)      │     │
               │ └───────────────┘     │
               │ + 跨模块路径验证      │
-              │ + merge-json 合并     │
+              │ + vuln-db batch-update│
               │                       │
-              │   输入: candidates_df  │
-              │        +candidates_sec │
-              │   输出: verified.json  │
+              │   输入: scan.db 候选   │
+              │   输出: scan.db 验证   │
               └───────────┬───────────┘
                           │
                           ▼
               ┌───────────────────────┐
               │       Reporter        │  ← 阶段4: 报告生成
-              │   • Markdown 报告     │
-              │   • 漏洞详情聚焦      │
+              │   • report-generator  │
+              │     (程序化生成全量)  │
+              │   • LLM 补充深度分析  │
               │                       │
               │   输入:               │
-              │   • verified.json    │
+              │   • scan.db          │
               │   • project_model    │
               │                       │
               │   输出: report.md     │
@@ -102,15 +102,15 @@
 
 | Agent | 输入 | 输出 | 说明 |
 |-------|------|------|------|
-| **orchestrator** | 用户指令 | `scan_log.json` | 协调全流程，记录扫描日志 |
+| **orchestrator** | 用户指令 | `scan_log.json`、`scan.db`（初始化） | 协调全流程，初始化数据库，记录扫描日志 |
 | **architecture** | 源代码 | `project_model.json`<br>`call_graph.json`<br>`threat_analysis_report.md` | 架构分析、威胁建模 |
-| **dataflow-scanner** | `project_model.json`<br>`call_graph.json` | `candidates_df.json` | 协调模块扫描 + 跨模块分析 + merge-json 合并 |
-| **dataflow-module-scanner** | 模块文件列表<br>调用图子集 | `candidates_df_{module}.json` | 单模块污点分析（子Agent） |
-| **security-auditor** | `project_model.json`<br>`call_graph.json` | `candidates_sec.json` | 协调模块审计 + 跨模块安全分析 + merge-json 合并 |
-| **security-module-scanner** | 模块文件列表<br>调用图子集 | `candidates_sec_{module}.json` | 单模块安全审计（子Agent） |
-| **verification** | `candidates_df.json`<br>`candidates_sec.json` | `verified.json` | 协调漏洞验证：合并去重 + 分批调度 + 跨模块验证 + merge-json 合并 |
-| **verification-worker** | 批次漏洞列表<br>调用图子集 | `verified_{module}.json` | 单批次深度验证 + 置信度评分 + 严重性重评估（子Agent） |
-| **reporter** | `verified.json`<br>`project_model.json` | `report.md` | 生成最终报告 |
+| **dataflow-scanner** | `project_model.json`<br>`call_graph.json` | `scan.db`（候选漏洞） | 协调模块扫描 + 跨模块分析，写入数据库 |
+| **dataflow-module-scanner** | 模块文件列表<br>调用图子集 | `scan.db`（vuln-db insert） | 单模块污点分析（子Agent） |
+| **security-auditor** | `project_model.json`<br>`call_graph.json` | `scan.db`（候选漏洞） | 协调模块审计 + 跨模块安全分析，写入数据库 |
+| **security-module-scanner** | 模块文件列表<br>调用图子集 | `scan.db`（vuln-db insert） | 单模块安全审计（子Agent） |
+| **verification** | `scan.db`（候选漏洞） | `scan.db`（验证结果） | 协调漏洞验证：去重 + 分批调度 + 跨模块验证 |
+| **verification-worker** | `scan.db`（批次漏洞ID）<br>调用图子集 | `scan.db`（vuln-db batch-update） | 单批次深度验证 + 置信度评分 + 严重性重评估（子Agent） |
+| **reporter** | `scan.db`<br>`project_model.json` | `report.md` | report-generator 生成全量骨架 + LLM 补充分析 |
 
 ## 核心特性
 
@@ -126,7 +126,8 @@
 - **LSP 优先**: 优先使用 LSP 进行代码分析，grep 作为回退方案
 - **自主补充验证**: Verification Worker 直接读取源码补充验证，无需外部反馈循环
 - **评分规则可配置**: 置信度评分规则可通过 `scoring_rules.json` 自定义
-- **merge-json 工具合并**: 使用自定义 Tool 程序化合并 JSON，避免 LLM 输出限制
+- **SQLite 数据库存储**: 漏洞数据存储在 SQLite 数据库（`scan.db`）中，替代分散的 JSON 中间文件，确保数据一致性和查询效率
+- **程序化报告生成**: 使用 `report-generator` 工具从数据库程序化生成 100% 完整的报告，解决 LLM 输出截断问题
 - **模块化 Skill**: 知识型能力（污点规则、评分方法等）提取为独立 Skill，便于维护和扩展
 
 ## 快速开始
@@ -177,13 +178,13 @@ opencode
 | ---------------- | -------- | ---------------------------------- | ------------------------ |
 | orchestrator     | primary  | 协调整个扫描流程，记录扫描日志     | Tab 切换或 @orchestrator |
 | architecture     | subagent | 架构分析、威胁建模、LSP检测、调用图 | @architecture            |
-| dataflow-scanner | subagent | **协调者**：按模块调度子Agent + 跨模块分析 + merge-json 合并 | @dataflow-scanner        |
-| dataflow-module-scanner | subagent | 单模块污点分析 + 标记跨模块数据流 | 由 dataflow-scanner 调用 |
-| security-auditor | subagent | **协调者**：按模块调度子Agent + 跨模块安全分析 + merge-json 合并 | @security-auditor        |
-| security-module-scanner | subagent | 单模块安全审计 + 标记跨模块安全提示 | 由 security-auditor 调用 |
-| verification     | subagent | **协调者**：合并去重 + 分批调度验证 + 跨模块验证 + merge-json 合并 | @verification            |
-| verification-worker | subagent | 单批次深度验证 + 置信度评分 + 严重性重评估 | 由 verification 调用 |
-| reporter         | subagent | 生成漏洞报告（与威胁报告分工）     | @reporter                |
+| dataflow-scanner | subagent | **协调者**：按模块调度子Agent + 跨模块分析 + vuln-db insert | @dataflow-scanner        |
+| dataflow-module-scanner | subagent | 单模块污点分析 + vuln-db insert | 由 dataflow-scanner 调用 |
+| security-auditor | subagent | **协调者**：按模块调度子Agent + 跨模块安全分析 + vuln-db insert | @security-auditor        |
+| security-module-scanner | subagent | 单模块安全审计 + vuln-db insert | 由 security-auditor 调用 |
+| verification     | subagent | **协调者**：vuln-db dedup + 分批调度验证 + 跨模块验证 | @verification            |
+| verification-worker | subagent | 单批次深度验证 + 置信度评分 + vuln-db batch-update | 由 verification 调用 |
+| reporter         | subagent | report-generator 生成骨架 + LLM 补充分析 | @reporter                |
 
 ### 层级架构
 
@@ -200,39 +201,39 @@ DataFlow Scanner、Security Auditor 和 Verification 都采用协调者-工作�
     ├── @dataflow-module-scanner (模块2)      ├── @security-module-scanner (模块2)
     │       └── ...                           │       └── ...
     │                                         │
-    ├── 收集所有模块的候选漏洞                ├── 收集所有模块的候选漏洞
+    ├── 收集所有模块的扫描统计                ├── 收集所有模块的审计统计
     │                                         │
     ├── 执行跨模块数据流分析                  ├── 执行跨模块安全分析
     │                                         │
-    └── merge-json 工具合并                   └── merge-json 工具合并
-        → candidates_df.json                      → candidates_sec.json
+    └── vuln-db stats 验证                    └── vuln-db stats 验证
+        → scan.db (候选漏洞)                      → scan.db (候选漏洞)
 ```
 
 ```
 @verification (协调者)
     │
-    ├── 合并 candidates_df.json + candidates_sec.json
-    ├── 按 (file, line_start, function) 去重
+    ├── vuln-db dedup（按 file, line_start, function_name, type 去重）
+    ├── vuln-db query phase=candidate（获取候选列表）
     ├── 按 source_module 分组
     │
     ├── @verification-worker (模块1批次)
-    │       └── 深度验证 + 置信度评分 + 严重性重评估
+    │       └── vuln-db query + 深度验证 + vuln-db batch-update
     │
     ├── @verification-worker (模块2批次)
     │       └── ...
     │
-    ├── 跨模块漏洞路径验证
+    ├── 跨模块漏洞路径验证 → vuln-db batch-update
     │
-    └── merge-json 工具合并
-        → verified.json
+    └── vuln-db stats phase=verified（汇总验证结果）
 ```
 
 **优势**：
 - 每个子 Agent 只处理一个模块/批次，避免上下文爆炸
 - 模块内聚性好，分析更完整
 - 协调者负责跨模块分析，捕获模块边界漏洞
-- Verification 协调者负责去重，避免同一漏洞被重复验证
-- 使用 merge-json 工具程序化合并，避免 LLM 输出限制
+- Verification 协调者负责去重（SQL 精确去重），避免同一漏洞被重复验证
+- 所有漏洞数据存储在 SQLite 数据库中，无需 JSON 文件合并，数据一致性有保障
+- report-generator 工具程序化生成 100% 完整的报告，解决 LLM 输出截断问题
 
 ## Skill 说明
 
@@ -245,6 +246,7 @@ DataFlow Scanner、Security Auditor 和 Verification 都采用协调者-工作�
 | confidence-scoring | `.opencode/skill/confidence-scoring/` | 置信度评分方法（含一票否决） | verification-worker |
 | cross-file-analysis | `.opencode/skill/cross-file-analysis/` | 跨文件追踪方法 | architecture, 所有 Scanner, verification, verification-worker |
 | agent-communication | `.opencode/skill/agent-communication/` | 路径约定、JSON Schema | 所有 Agent |
+| vulnerability-db | `.opencode/skill/vulnerability-db/` | SQLite 数据库 Schema、vuln-db 工具 API | 所有 Scanner, verification, reporter |
 
 ### 扩展新语言
 
@@ -257,19 +259,33 @@ DataFlow Scanner、Security Auditor 和 Verification 都采用协调者-工作�
 
 | Tool | 路径 | 用途 |
 |------|------|------|
-| merge-json | `.opencode/tool/merge-json.ts` | 合并多个 JSON 文件的数组字段 |
+| vuln-db | `.opencode/tool/vuln-db.ts` | SQLite 漏洞数据库 CRUD 操作（init/insert/query/update/dedup/stats/log） |
+| report-generator | `.opencode/tool/report-generator.ts` | 从 SQLite 程序化生成完整 Markdown 漏洞报告 |
+| merge-json | `.opencode/tool/merge-json.ts` | 合并多个 JSON 文件的数组字段（已弃用，漏洞数据改用 vuln-db） |
+| validate-json | `.opencode/tool/validate-json.ts` | JSON 文件语法校验（仍用于 project_model.json、call_graph.json、scan_log.json） |
 
-### merge-json
+### vuln-db
 
-程序化合并多个 JSON 文件，避免 LLM 输出 token 限制。
+SQLite 漏洞数据库工具，替代之前分散的 JSON 中间文件。通过 `command` 参数区分操作：
 
-参数：
-- `directory`: 包含 JSON 文件的目录
-- `pattern`: 文件名匹配模式（如 `candidates_df_*.json`）
-- `output`: 合并后的输出文件路径
-- `key`: 要合并的数组字段名（默认 `vulnerabilities`）
+- `init` — 创建数据库和表（Orchestrator 在扫描开始时调用）
+- `insert` — 批量插入候选漏洞（Scanner Worker 调用）
+- `query` — 按条件查询漏洞（支持 phase/status/module/confidence 过滤）
+- `update` / `batch-update` — 更新验证结果（Verification Worker 调用）
+- `dedup` — 按 (file, line_start, function_name, type) 精确去重
+- `stats` — 聚合统计（按 status/severity/module 分组）
+- `log` — 记录 Agent 执行事件
+- `export-json` — 将查询结果导出为 JSON（调试用）
 
-返回合并统计摘要，不返回完整内容。
+详细 API 参考 `@skill:vulnerability-db`。
+
+### report-generator
+
+从 SQLite 数据库程序化生成 100% 完整的 Markdown 漏洞报告，确保所有已验证漏洞无遗漏。
+
+生成内容：扫描摘要、Top 10 关键漏洞、攻击面分析、全量漏洞详情（按严重性分组）、模块分布交叉表、CWE 分布。
+
+所有统计数据由 SQL 精确计算，确保报告内各表格数据一致。
 
 ## 检测能力
 
@@ -324,7 +340,7 @@ recv() [network.c]           ← 外部输入
 
 包含三个子机制：
 
-1. **去重**: Verification 协调者在合并候选漏洞后，按 `(file, line_start, function)` 三元组去重，避免同一漏洞被重复验证
+1. **去重**: Verification 协调者调用 `vuln-db dedup`，按 `(file, line_start, function_name, type)` 精确去重，避免同一漏洞被重复验证
 2. **一票否决**: 调用链断裂、不可达、测试代码直接判定为 FALSE_POSITIVE（confidence = 0），无需完整评分
 3. **多维度评分**: 通过可达性（参考 `trust_level`）、可控性、缓解措施、上下文、跨文件五个维度量化评分（详见 `@skill:confidence-scoring`）
 
@@ -361,15 +377,17 @@ Verification Worker → 发现调用链不完整
 
 ### 漏洞扫描报告 (`report.md`)
 
-由 Reporter Agent 生成，**聚焦于漏洞本身**：
+由 Reporter Agent 生成。首先通过 `report-generator` 工具从 SQLite 数据库程序化生成完整骨架（确保 100% 漏洞覆盖率），然后 LLM 补充执行摘要和深度分析：
 
-1. **扫描摘要**: 漏洞统计表格 + Top 5 关键漏洞
+1. **扫描摘要**: 严重性分布表、验证状态分布表（SQL 精确计算）
 2. **攻击面分析**: 入口点和外部接口列表
-3. **漏洞详情**: 按验证后严重性（`verified_severity`）分组，每个漏洞包含：
+3. **全量漏洞详情**: 按验证后严重性（`verified_severity`）分组，每个漏洞包含：
    - 精确的文件路径和行号
-   - 从实际代码读取的代码片段
-   - 完整的数据流达成路径
+   - 代码片段、数据流达成路径
    - 置信度评分和严重性重评估标注
+4. **模块漏洞分布**: 交叉表（模块 × 严重性）
+5. **CWE 分布**: 统计
+6. **执行摘要 + 深度分析**: LLM 补充的增值内容
 
 ## 项目结构
 
@@ -387,26 +405,28 @@ your-project/
 │   │   ├── verification.md         # 漏洞验证协调者
 │   │   ├── verification-worker.md  # 模块级验证子Agent
 │   │   └── reporter.md             # 报告生成
-│   ├── skill/                      # Skill 定义（6 个）
+│   ├── skill/                      # Skill 定义（7 个）
 │   │   ├── agent-communication/    # Agent 间通信规范
 │   │   ├── c-cpp-taint-tracking/   # C/C++ 污点追踪规则
 │   │   ├── confidence-scoring/     # 置信度评分方法
 │   │   ├── cross-file-analysis/    # 跨文件分析方法
 │   │   ├── pre-validation-rules/   # 预验证/误报过滤
+│   │   ├── vulnerability-db/       # SQLite 漏洞数据库 Schema 和 API
 │   │   └── bun-file-io/            # Bun 文件 I/O（内置）
 │   └── tool/                       # 自定义工具
-│       ├── merge-json.ts           # JSON 文件合并工具
-│       └── merge-json.txt          # 工具描述
+│       ├── vuln-db.ts              # SQLite 漏洞数据库 CRUD 工具
+│       ├── vuln-db.txt             # vuln-db 工具描述
+│       ├── report-generator.ts     # 程序化报告生成工具
+│       ├── report-generator.txt    # report-generator 工具描述
+│       ├── merge-json.ts           # JSON 文件合并工具（已弃用）
+│       ├── merge-json.txt          # 工具描述
+│       ├── validate-json.ts        # JSON 校验工具
+│       └── validate-json.txt       # 工具描述
 └── scan-results/                   # 扫描输出（自动创建）
     ├── .context/                   # 结构化上下文（Agent 间通信）
+    │   ├── scan.db                 # SQLite 漏洞数据库（候选 + 验证结果）
     │   ├── project_model.json      # 项目模型（architecture 输出）
     │   ├── call_graph.json         # 调用图（architecture 输出）
-    │   ├── candidates_df.json      # 数据流候选漏洞（merge-json 合并）
-    │   ├── candidates_df_*.json    # 模块级数据流中间结果
-    │   ├── candidates_sec.json     # 安全审计候选漏洞（merge-json 合并）
-    │   ├── candidates_sec_*.json   # 模块级安全审计中间结果
-    │   ├── verified.json           # 验证后漏洞（merge-json 合并）
-    │   ├── verified_*.json         # 模块级验证中间结果
     │   ├── scan_log.json           # 扫描日志（orchestrator 输出）
     │   └── scoring_rules.json      # 评分规则（可选，自定义置信度评分）
     ├── threat_analysis_report.md   # 威胁分析报告（architecture 输出）
@@ -422,6 +442,7 @@ your-project/
 | `PROJECT_ROOT` | 被扫描项目的根目录 | **必须由用户在提示词中明确指定** |
 | `SCAN_OUTPUT` | 扫描输出目录 | `{PROJECT_ROOT}/scan-results` |
 | `CONTEXT_DIR` | 上下文存储目录 | `{SCAN_OUTPUT}/.context` |
+| `DB_PATH` | 漏洞数据库路径 | `{CONTEXT_DIR}/scan.db` |
 
 ## threat.md 使用指南
 

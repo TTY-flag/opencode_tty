@@ -30,6 +30,7 @@ permission:
 - **项目根目录** (`PROJECT_ROOT`): 源代码所在位置
 - **扫描输出目录** (`SCAN_OUTPUT`): 报告输出位置
 - **上下文目录** (`CONTEXT_DIR`): JSON 文件读写位置
+- **数据库路径** (`DB_PATH`): 漏洞数据库 `{CONTEXT_DIR}/scan.db`
 
 ### 读取路径
 | 内容 | 路径 |
@@ -38,10 +39,10 @@ permission:
 | 调用图 | `{CONTEXT_DIR}/call_graph.json` |
 | 源代码 | `{PROJECT_ROOT}/...` |
 
-### 写入路径
-| 内容 | 路径 |
-|------|------|
-| 候选漏洞 | `{CONTEXT_DIR}/candidates_df.json`（通过 `merge-json` 工具生成） |
+### 数据写入
+候选漏洞通过 `vuln-db insert` 工具写入 SQLite 数据库（`{DB_PATH}`），不再写入 JSON 文件。
+
+关于数据库 Schema 和工具用法，参考 `@skill:vulnerability-db`。
 
 ### 传递给子 Agent
 调用 `@dataflow-module-scanner` 时，**必须传递路径上下文**：
@@ -52,6 +53,7 @@ permission:
 ## 路径上下文
 - 项目根目录: {PROJECT_ROOT}
 - 上下文目录: {CONTEXT_DIR}
+- 数据库路径: {DB_PATH}
 
 ## 模块信息
 ...
@@ -61,19 +63,19 @@ permission:
 
 ```
 dataflow-scanner (协调者 - 你)
-    ├── @dataflow-module-scanner (模块1)
-    ├── @dataflow-module-scanner (模块2)
-    ├── @dataflow-module-scanner (模块N)
-    └── 跨模块数据流分析 + merge-json 合并
+    ├── @dataflow-module-scanner (模块1) → vuln-db insert
+    ├── @dataflow-module-scanner (模块2) → vuln-db insert
+    ├── @dataflow-module-scanner (模块N) → vuln-db insert
+    └── 跨模块数据流分析 → vuln-db insert
 ```
 
 ## 核心职责
 
 1. **读取项目模型**: 从 `project_model.json` 获取模块列表
 2. **模块调度**: 为每个模块调用 `@dataflow-module-scanner`
-3. **结果收集**: 记录各模块写入的文件路径和跨模块提示（不在上下文中保存漏洞详情）
+3. **结果收集**: 记录各模块的扫描统计和跨模块提示（漏洞详情已写入数据库）
 4. **跨模块分析**: 分析模块间的数据流传递
-5. **输出合并**: 使用 `merge-json` 工具合并所有模块中间文件到 `candidates_df.json`
+5. **结果验证**: 调用 `vuln-db stats` 确认所有候选漏洞已入库
 
 ## 接收输入
 
@@ -124,27 +126,29 @@ dataflow-scanner (协调者 - 你)
 
 **扫描可能中途中断，必须在调度前检测已完成的模块，避免重复扫描。**
 
-对排序后的模块列表逐一检查 `{CONTEXT_DIR}/candidates_df_{模块简称}.json` 是否已存在且非空：
+调用 `vuln-db query` 检查数据库中各模块是否已有 dataflow-scanner 的候选数据：
+
+```
+vuln-db command=query db_path={DB_PATH} phase=candidate source_agent=dataflow-scanner
+```
+
+从返回结果中按 `source_module` 分组，确定哪些模块已完成：
 
 ```
 断点续扫检测:
-├── candidates_df_ipc.json      存在 (12KB) → 跳过 IPC通信模块
-├── candidates_df_plugin.json   存在 (8KB)  → 跳过 插件系统模块
-├── candidates_df_smap.json     不存在      → 待扫描
-├── candidates_df_config.json   不存在      → 待扫描
-└── candidates_df_log.json      不存在      → 待扫描
+├── IPC通信模块: DB 中已有 12 条候选 → 跳过
+├── 插件系统模块: DB 中已有 8 条候选 → 跳过
+├── SMAP内存管理: DB 中无数据 → 待扫描
+├── 配置解析模块: DB 中无数据 → 待扫描
+└── 日志工具模块: DB 中无数据 → 待扫描
 
-已完成: 2 个模块（从中间文件恢复）
+已完成: 2 个模块（从数据库恢复）
 待扫描: 3 个模块
 ```
 
 **跳过规则**：
-- 文件存在且大小 > 0 → 该模块已完成，跳过
-- 文件不存在或大小为 0 → 该模块未完成，需要调度子 Agent
-
-**跳过的模块仍然需要**：
-1. 读取其中间文件提取跨模块数据流提示（`[OUT]`/`[IN]` 标记），用于阶段 6 的跨模块分析
-2. 将文件路径加入合并列表，用于阶段 7 的 merge-json 合并
+- 该模块在 DB 中有 `source_agent=dataflow-scanner` 的候选数据 → 已完成，跳过
+- 无数据 → 未完成，需要调度子 Agent
 
 ### 阶段 4: 调度子 Agent
 
@@ -158,6 +162,7 @@ dataflow-scanner (协调者 - 你)
 ## 路径上下文
 - 项目根目录: {PROJECT_ROOT}
 - 上下文目录: {CONTEXT_DIR}
+- 数据库路径: {DB_PATH}
 
 ## 模块信息
 - 模块名: [模块名称]
@@ -179,30 +184,18 @@ dataflow-scanner (协调者 - 你)
 ## 扫描要求
 1. 在模块内进行完整的污点分析，优先扫描 trust_level 为 untrusted_network/untrusted_local 的入口
 2. 标记可能流出模块的数据（供跨模块分析）
-3. **将漏洞详情写入 `{CONTEXT_DIR}/candidates_df_{模块简称}.json`**
-4. 返回文本只包含：扫描统计、写入的文件路径、跨模块数据流提示（不含完整漏洞详情）
+3. **使用 `vuln-db insert` 将候选漏洞写入数据库**
+4. 返回文本只包含：扫描统计、跨模块数据流提示（不含完整漏洞详情）
 ```
 
 ### 阶段 5: 收集子 Agent 结果
 
-每个子 Agent 返回的文本**只包含摘要**（漏洞详情已写入文件）：
+每个子 Agent 返回的文本**只包含摘要**（漏洞详情已写入数据库）：
 
-1. **写入文件路径**: 记录该模块写入的中间文件路径
+1. **扫描统计**: 该模块发现的候选漏洞数量
 2. **跨模块提示**: 数据流出/流入点（体积小，可留在上下文中）
 
-维护一个**完整模块文件路径列表**（包含续扫恢复的 + 本次新扫描的），用于合并：
-```
-全部模块文件（含恢复 + 新扫描）:
-- {CONTEXT_DIR}/candidates_df_ipc.json     ← 续扫恢复
-- {CONTEXT_DIR}/candidates_df_plugin.json  ← 续扫恢复
-- {CONTEXT_DIR}/candidates_df_smap.json    ← 本次扫描
-- {CONTEXT_DIR}/candidates_df_config.json  ← 本次扫描
-- {CONTEXT_DIR}/candidates_df_log.json     ← 本次扫描
-```
-
-**不要将漏洞详情保存在协调者上下文中**，只记录文件路径和跨模块提示。
-
-对于续扫恢复的模块，需要读取其中间文件提取跨模块数据流提示，补充到跨模块提示列表中。
+**不要将漏洞详情保存在协调者上下文中**，只记录统计和跨模块提示。
 
 ### 阶段 6: 跨模块数据流分析
 
@@ -214,35 +207,23 @@ dataflow-scanner (协调者 - 你)
 4. **追踪数据变换**：读取边界函数源码，检查参数在模块边界是否被清洗、截断或类型转换
 5. **构造跨模块漏洞**：将 Source（模块 A）→ Sink（模块 B）的完整路径记录为漏洞条目
 
-将跨模块漏洞写入 `{CONTEXT_DIR}/candidates_df_cross_module.json`，格式与模块中间文件一致，但增加 `cross_module: true` 和 `modules_involved`（涉及的模块名称数组）字段。
+将跨模块漏洞通过 `vuln-db insert` 写入数据库，设置 `cross_module: true` 和 `modules_involved`（涉及的模块名称数组）字段。
 
-### 阶段 7: 使用 merge-json 工具合并输出
+### 阶段 7: 验证扫描结果
 
-**使用 `merge-json` 工具将所有模块中间文件合并为最终输出，不要手动拼接 JSON 内容。**
-
-调用方式：
+调用 `vuln-db stats` 确认所有候选漏洞已入库：
 
 ```
-使用 merge-json 工具:
-- directory: {CONTEXT_DIR}
-- pattern: candidates_df_*.json
-- output: {CONTEXT_DIR}/candidates_df.json
-- key: vulnerabilities
+vuln-db command=stats db_path={DB_PATH} phase=candidate
 ```
 
-工具会自动：
-1. 读取 `{CONTEXT_DIR}` 下所有匹配 `candidates_df_*.json` 的文件
-2. 合并各文件的 `vulnerabilities` 数组
-3. 写入 `{CONTEXT_DIR}/candidates_df.json`
-4. 返回合并统计（文件数、漏洞数）
+检查返回的统计信息，确认各模块的漏洞数量与子 Agent 报告一致。
 
-**合并后必须调用 `validate-json` 工具校验** `candidates_df.json`：
-- PASS → 校验通过，向 Orchestrator 报告完成
-- FAIL → 根据错误信息修复，重新写入并再次校验（最多重试 2 次）
+同时调用 `vuln-db log` 记录完成状态：
 
-**不需要在对话中输出完整的合并 JSON 内容。**
-
-中间文件（`candidates_df_*.json`）保留在 `{CONTEXT_DIR}` 中，可用于调试和问题追溯。
+```
+vuln-db command=log db_path={DB_PATH} agent_name=dataflow-scanner status=success item_count=[总候选数]
+```
 
 ## 进度报告
 
@@ -268,4 +249,4 @@ dataflow-scanner (协调者 - 你)
 1. **不要直接扫描文件** - 你是协调者，具体扫描由子 Agent 完成
 2. **保持上下文精简** - 只传递必要信息给子 Agent
 3. **跨模块分析是你的核心价值** - 子 Agent 无法看到全局
-4. **使用 merge-json 工具合并** - 绝不手动拼接 JSON，避免输出过大失败
+4. **使用 vuln-db 工具** - 所有漏洞数据通过数据库读写，不再使用 JSON 中间文件

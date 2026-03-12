@@ -27,20 +27,16 @@ permission:
 协调者会在调用时传递：
 - **项目根目录** (`PROJECT_ROOT`): 源代码所在位置
 - **上下文目录** (`CONTEXT_DIR`): JSON 文件读写位置
+- **数据库路径** (`DB_PATH`): 漏洞数据库 `{CONTEXT_DIR}/scan.db`
 
-### 写入路径
-| 内容 | 路径 |
-|------|------|
-| 模块候选漏洞 | `{CONTEXT_DIR}/candidates_df_{模块简称}.json` |
+### 数据写入
+候选漏洞通过 `vuln-db insert` 工具写入 SQLite 数据库（`{DB_PATH}`）。
 
-**模块简称规则**：取模块名的英文部分，全部小写，空格替换为 `_`。例如：
-- "IPC通信模块" → `ipc`
-- "插件系统模块" → `plugin`
-- "SMAP内存管理" → `smap`
+关于数据库 Schema 和工具用法，参考 `@skill:vulnerability-db`。
 
 ### 重要
 - 所有文件路径在输出中都使用**相对于项目根目录**的格式
-- **漏洞详情必须写入中间文件，不得在返回文本中完整输出**
+- **漏洞详情必须通过 `vuln-db insert` 写入数据库，不得在返回文本中完整输出**
 
 ## 接收输入
 
@@ -49,6 +45,7 @@ permission:
 ### 路径上下文（必须）
 - **项目根目录**: 源代码所在位置
 - **上下文目录**: JSON 文件读写位置
+- **数据库路径**: 漏洞数据库路径
 
 ### 模块信息
 1. **模块名称**: 当前扫描的模块名
@@ -147,24 +144,41 @@ CWE: CWE-120
 
 **标记可能流出/流入模块的数据**，供协调者进行跨模块分析。格式参考 `@skill:cross-file-analysis` 中的跨模块数据流标记。
 
-## 结构化输出（必须先写文件）
+## 结构化输出（必须先写入数据库）
 
-扫描完成后，**首先**将所有漏洞详情写入 `{CONTEXT_DIR}/candidates_df_{模块简称}.json`。
+扫描完成后，**首先**使用 `vuln-db insert` 将所有候选漏洞写入数据库。
 
-关于 JSON 格式规范和 Schema 详情，参考 `@skill:agent-communication`。
+关于数据库字段和工具用法，参考 `@skill:vulnerability-db`。
 
-**写入后必须调用 `validate-json` 工具校验**：
-- PASS → 校验通过，继续返回摘要
-- FAIL → 根据错误信息修复 JSON 内容，重新写入文件并再次校验（最多重试 2 次）
-
-写入且校验通过后，在返回文本中注明文件路径，例如：
 ```
-已写入: {CONTEXT_DIR}/candidates_df_ipc.json（5 个漏洞，validate-json PASS）
+vuln-db command=insert db_path={DB_PATH} vulnerabilities='[
+  {
+    "id": "VULN-DF-[模块简称]-001",
+    "source_agent": "dataflow-scanner",
+    "source_module": "[模块名称]",
+    "type": "buffer_overflow",
+    "cwe": "CWE-120",
+    "severity": "High",
+    "file": "src/ipc/handler.cpp",
+    "line_start": 250,
+    "line_end": 255,
+    "function": "RecvMessage",
+    "description": "...",
+    "code_snippet": "...",
+    "data_flow": [...],
+    "pre_validated": true
+  }
+]'
+```
+
+写入后在返回文本中注明数量：
+```
+已写入数据库: 5 个候选漏洞（dataflow-scanner, IPC通信模块）
 ```
 
 ## 返回给协调者的内容
 
-**漏洞详情已写入文件，返回文本中只包含摘要和跨模块提示**，不重复输出漏洞详情：
+**漏洞详情已写入数据库，返回文本中只包含摘要和跨模块提示**，不重复输出漏洞详情：
 
 ```
 === 模块扫描完成: [模块名] ===
@@ -173,7 +187,7 @@ CWE: CWE-120
 - 扫描文件数: X
 - 代码行数: Y
 - 发现候选漏洞: Z 个
-- 写入文件: {CONTEXT_DIR}/candidates_df_{模块简称}.json
+- 已写入数据库: {DB_PATH}
 
 ## 跨模块数据流提示
 
@@ -190,5 +204,5 @@ CWE: CWE-120
 
 1. **聚焦模块内分析** - 不要尝试追踪到其他模块
 2. **标记边界数据流** - 流出/流入点是协调者跨模块分析的关键
-3. **先写文件再返回摘要** - 漏洞详情写入 JSON 文件，返回文本只含统计和跨模块提示
+3. **先写数据库再返回摘要** - 漏洞详情通过 `vuln-db insert` 写入数据库，返回文本只含统计和跨模块提示
 4. **预验证减少误报** - 只报告通过预验证的漏洞

@@ -1,0 +1,21 @@
+feat: migrate vulnerability data from JSON files to SQLite database
+
+Replace scattered JSON intermediate files with a single SQLite database
+(scan.db) for vulnerability lifecycle data storage.
+
+New tools:
+- vuln-db: SQLite CRUD tool with init/insert/query/update/batch-update/
+  dedup/stats/log/export-json commands
+- report-generator: programmatic Markdown report generation from SQLite,
+  ensuring 100% vulnerability coverage (fixes report truncation)
+
+New skill:
+- vulnerability-db: documents DB schema, vuln-db API, agent patterns
+
+Agent updates:
+- orchestrator: adds DB init step, passes DB_PATH to all sub-agents
+- scanners: use vuln-db insert instead of JSON file writes
+- verification: uses vuln-db dedup/query/batch-update
+- reporter: uses report-generator for complete skeleton
+
+Deprecated: merge-json tool no longer used for vulnerability data

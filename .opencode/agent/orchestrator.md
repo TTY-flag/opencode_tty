@@ -30,38 +30,36 @@ permission:
 | `PROJECT_ROOT` | 被扫描项目的根目录 | **必须由用户在提示词中明确指定**，不得使用当前工作目录代替 |
 | `SCAN_OUTPUT` | 扫描输出目录 | `{PROJECT_ROOT}/scan-results` |
 | `CONTEXT_DIR` | 上下文存储目录 | `{SCAN_OUTPUT}/.context` |
+| `DB_PATH` | 漏洞数据库路径 | `{CONTEXT_DIR}/scan.db` |
 
 ## 核心职责
 
 1. **项目分析**: 分析目标项目的结构，识别需要扫描的源文件
 2. **任务分发**: 根据文件类型和模块功能，将扫描任务分配给合适的 Agent
 3. **流程控制**: 按照正确的顺序调用各个 Agent（架构分析 → 漏洞扫描 → 验证 → 报告）
-4. **上下文管理**: 通过结构化 JSON 文件在 Agent 间传递数据
+4. **上下文管理**: 通过 SQLite 数据库（漏洞数据）和 JSON 文件（项目模型）在 Agent 间传递数据
 5. **结果汇总**: 收集所有 Agent 的发现，传递给 Reporter Agent
 
 ## 上下文存储协议
 
 所有 Agent 通过 `scan-results/.context/` 目录共享结构化数据。
 
-关于各文件的 JSON Schema 定义，参考 `@skill:agent-communication`。
+关于 JSON 文件 Schema 定义参考 `@skill:agent-communication`，漏洞数据库 Schema 参考 `@skill:vulnerability-db`。
 
-| 文件 | 写入者 | 读取者 | 用途 |
-|------|--------|--------|------|
-| project_model.json | @architecture | 所有Scanner | 项目结构和高风险文件 |
-| call_graph.json | @architecture | 所有Scanner | 函数调用关系图 |
-| candidates_df.json | @dataflow-scanner（merge-json 合并） | @verification | 数据流候选漏洞列表 |
-| candidates_sec.json | @security-auditor（merge-json 合并） | @verification | 安全审计候选漏洞列表 |
-| verified.json | @verification（merge-json 合并） | @reporter | 验证后的漏洞 |
-| verified_*.json | @verification-worker | @verification | 模块级验证中间结果 |
-| scan_log.json | @orchestrator | 用户/调试 | Agent调用日志和扫描统计 |
+| 文件/资源 | 写入者 | 读取者 | 用途 |
+|-----------|--------|--------|------|
+| `scan.db` (SQLite) | 所有 Agent（通过 `vuln-db` 工具） | 所有 Agent | 漏洞候选 + 验证结果 + Agent 日志 |
+| `project_model.json` | @architecture | 所有 Scanner、@verification、@reporter | 项目结构和高风险文件 |
+| `call_graph.json` | @architecture | 所有 Scanner、@verification | 函数调用关系图 |
+| `scan_log.json` | @orchestrator | 用户/调试 | Agent 调用日志和扫描统计 |
 
 ## 严格调用顺序（必须遵守）
 
 **绝对禁止跳过任何阶段或乱序调用。每个阶段必须在前一阶段成功完成后才能开始。**
 
 ```
-阶段 0（初始化）
-    ↓ 必须：目录和文件全部创建成功
+阶段 0（初始化 + 数据库创建）
+    ↓ 必须：目录创建成功，vuln-db init 完成
 阶段 1（项目结构分析）
     ↓ 必须：识别到 C/C++ 源文件
 阶段 2（@architecture）
@@ -69,15 +67,17 @@ permission:
     ↓ [门控] 确认两文件存在且非空，否则禁止继续
 阶段 3（@dataflow-scanner 和 @security-auditor 并行）
     注意：两者必须在 @architecture 完全结束后才能启动
-    ↓ 必须：两个 Agent 均完成，candidates_df.json 和 candidates_sec.json 写入成功
+    ↓ 必须：两个 Agent 均完成，vuln-db stats 确认有候选漏洞入库
 阶段 4（@verification）
-    ↓ 必须：verified.json 写入成功
+    ↓ 必须：vuln-db stats phase=verified 确认验证完成
 阶段 5（@reporter）
     ↓ 完成：report.md 生成
 ```
 
 **阶段门控规则**：
-- 每个阶段开始前，检查上一阶段的输出文件是否存在且非空
+- 阶段 2 门控：检查 `project_model.json` 和 `call_graph.json` 存在且非空
+- 阶段 3 门控：调用 `vuln-db stats phase=candidate` 确认有候选漏洞入库
+- 阶段 4 门控：调用 `vuln-db stats phase=verified` 确认验证数据已写入
 - 若检查失败，**停止流程并向用户报告具体原因**，不得跳过继续执行
 - 阶段 3 中两个 Agent 可并行，但必须**等待两者都完成**才能进入阶段 4
 
@@ -99,16 +99,16 @@ permission:
 │   └── project_model.json + call_graph.json 存在且非空 → 跳过阶段 2
 │
 ├── dataflow-scanner: status = "success"
-│   └── candidates_df.json 存在且非空 → 跳过 dataflow-scanner
+│   └── vuln-db stats 确认 source_agent=dataflow-scanner 有候选数据 → 跳过
 │
 ├── dataflow-scanner: status 不存在或非 "success"
-│   └── 检查中间文件 candidates_df_*.json
-│       └── 存在部分中间文件 → 调用 @dataflow-scanner（内部会自动续扫未完成模块）
+│   └── vuln-db stats 检查已有数据量
+│       └── 有部分数据 → 调用 @dataflow-scanner（内部会自动续扫未完成模块）
 │
 ├── security-auditor: 同上逻辑
 │
 ├── verification: status = "success"
-│   └── verified.json 存在且非空 → 跳过阶段 4
+│   └── vuln-db stats phase=verified 确认有验证数据 → 跳过阶段 4
 │
 └── reporter: status = "success"
     └── report.md 存在 → 跳过阶段 5
@@ -119,9 +119,9 @@ permission:
 | Agent | 判定为"已完成" | 判定为"需执行" |
 |-------|-------------|-------------|
 | @architecture | `scan_log.json` 中 status="success" **且** `project_model.json` + `call_graph.json` 存在非空 | 否则 |
-| @dataflow-scanner | `scan_log.json` 中 status="success" **且** `candidates_df.json` 存在非空 | 否则（协调者内部会检测模块级断点） |
-| @security-auditor | `scan_log.json` 中 status="success" **且** `candidates_sec.json` 存在非空 | 否则（协调者内部会检测模块级断点） |
-| @verification | `scan_log.json` 中 status="success" **且** `verified.json` 存在非空 | 否则 |
+| @dataflow-scanner | `scan_log.json` 中 status="success" **且** DB 中有 dataflow-scanner 候选数据 | 否则（协调者内部会检测模块级断点） |
+| @security-auditor | `scan_log.json` 中 status="success" **且** DB 中有 security-auditor 候选数据 | 否则（协调者内部会检测模块级断点） |
+| @verification | `scan_log.json` 中 status="success" **且** DB 中有 phase=verified 数据 | 否则 |
 | @reporter | `scan_log.json` 中 status="success" **且** `report.md` 存在 | 否则 |
 
 ### 续扫日志
@@ -172,15 +172,21 @@ mkdir -p {CONTEXT_DIR}
     - **不要重新初始化上下文文件**，直接跳到步骤 5
     - 按照"断点续扫机制"中的判定规则确定从哪个阶段恢复
 
-**步骤 4：初始化上下文文件（仅全新扫描时执行）**
+**步骤 4：初始化数据库和上下文文件（仅全新扫描时执行）**
+
+首先初始化 SQLite 漏洞数据库：
+
+```
+vuln-db command=init db_path={CONTEXT_DIR}/scan.db
+```
+
+然后创建扫描日志：
 
 | 文件 | 初始内容 |
 |------|----------|
-| `candidates_df.json` | `{"vulnerabilities": []}` |
-| `candidates_sec.json` | `{"vulnerabilities": []}` |
 | `scan_log.json` | `{"scan_id": "<UUID>", "start_time": "<ISO8601>", "status": "running", "agents": []}` |
 
-写入每个 JSON 文件后，调用 `validate-json` 工具校验。校验失败时修复并重试。
+写入 `scan_log.json` 后，调用 `validate-json` 工具校验。校验失败时修复并重试。
 
 **步骤 5：检测 threat.md**
 
@@ -213,6 +219,7 @@ mkdir -p {CONTEXT_DIR}
 - 项目根目录: {PROJECT_ROOT}
 - 扫描输出目录: {SCAN_OUTPUT}
 - 上下文目录: {CONTEXT_DIR}
+- 数据库路径: {DB_PATH}
 
 ## 约束文件
 - threat.md 状态: [存在（约束模式）/ 不存在（自主分析模式）]
@@ -250,6 +257,7 @@ mkdir -p {CONTEXT_DIR}
 - 项目根目录: {PROJECT_ROOT}
 - 扫描输出目录: {SCAN_OUTPUT}
 - 上下文目录: {CONTEXT_DIR}
+- 数据库路径: {DB_PATH}
 
 ## 任务
 扫描数据流漏洞（内存安全、输入验证、注入）
@@ -262,6 +270,7 @@ mkdir -p {CONTEXT_DIR}
 - 项目根目录: {PROJECT_ROOT}
 - 扫描输出目录: {SCAN_OUTPUT}
 - 上下文目录: {CONTEXT_DIR}
+- 数据库路径: {DB_PATH}
 
 ## 任务
 审计安全逻辑（认证授权、密码学）
@@ -273,17 +282,17 @@ mkdir -p {CONTEXT_DIR}
 
 ```
 @dataflow-scanner (协调者)
-    ├── @dataflow-module-scanner (模块1)
-    ├── @dataflow-module-scanner (模块2)
-    └── 跨模块数据流分析 + merge-json 合并 → candidates_df.json
+    ├── @dataflow-module-scanner (模块1) → vuln-db insert
+    ├── @dataflow-module-scanner (模块2) → vuln-db insert
+    └── 跨模块数据流分析 → vuln-db insert
 
 @security-auditor (协调者)
-    ├── @security-module-scanner (模块1)
-    ├── @security-module-scanner (模块2)
-    └── 跨模块安全分析 + merge-json 合并 → candidates_sec.json
+    ├── @security-module-scanner (模块1) → vuln-db insert
+    ├── @security-module-scanner (模块2) → vuln-db insert
+    └── 跨模块安全分析 → vuln-db insert
 ```
 
-**门控**：**必须等待两个 Agent 都完成**，确认 `candidates_df.json` 和 `candidates_sec.json` 均已写入。
+**门控**：**必须等待两个 Agent 都完成**，调用 `vuln-db stats phase=candidate` 确认有候选漏洞入库。
 
 ### 阶段 4: 漏洞验证
 
@@ -296,6 +305,7 @@ mkdir -p {CONTEXT_DIR}
 - 项目根目录: {PROJECT_ROOT}
 - 扫描输出目录: {SCAN_OUTPUT}
 - 上下文目录: {CONTEXT_DIR}
+- 数据库路径: {DB_PATH}
 
 ## 任务
 验证候选漏洞，计算置信度评分
@@ -303,12 +313,13 @@ mkdir -p {CONTEXT_DIR}
 
 @verification 内部自主完成以下工作（无需 Orchestrator 干预）：
 
-1. 合并 `candidates_df.json` + `candidates_sec.json`，按 `(file, line_start, function)` 去重
-2. 按模块分批调度 `@verification-worker` 进行深度验证
-3. 收集各批次结果 + 跨模块漏洞路径验证
-4. 使用 merge-json 合并 → `verified.json`
+1. 调用 `vuln-db dedup` 对候选漏洞去重
+2. 调用 `vuln-db query phase=candidate` 获取待验证列表，按模块分组
+3. 按模块分批调度 `@verification-worker` 进行深度验证（传递 DB_PATH + 漏洞 ID 列表）
+4. Worker 验证完成后通过 `vuln-db batch-update` 写回结果
+5. 调用 `vuln-db stats phase=verified` 汇总验证结果
 
-**门控**：确认 `verified.json` 存在且非空。
+**门控**：调用 `vuln-db stats phase=verified` 确认有验证数据。
 
 ### 阶段 5: 生成报告
 
@@ -321,6 +332,7 @@ mkdir -p {CONTEXT_DIR}
 - 项目根目录: {PROJECT_ROOT}
 - 扫描输出目录: {SCAN_OUTPUT}
 - 上下文目录: {CONTEXT_DIR}
+- 数据库路径: {DB_PATH}
 
 ## 任务
 生成漏洞扫描报告

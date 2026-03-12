@@ -1,6 +1,6 @@
 ---
 name: agent-communication
-description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定义、数据交换协议。所有参与漏洞扫描的 Agent 都应参考此 Skill。
+description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定义、数据库交互协议。所有参与漏洞扫描的 Agent 都应参考此 Skill。
 ---
 
 ## Use this when
@@ -12,13 +12,14 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 
 ## 路径约定
 
-扫描过程中使用以下三个路径变量：
+扫描过程中使用以下路径变量：
 
 | 变量 | 说明 | 确定方式 |
 |------|------|----------|
 | `PROJECT_ROOT` | 被扫描项目的根目录 | 由用户在提示词中明确指定，不得假设为当前工作目录 |
 | `SCAN_OUTPUT` | 扫描输出目录 | `{PROJECT_ROOT}/scan-results` |
 | `CONTEXT_DIR` | 上下文存储目录 | `{SCAN_OUTPUT}/.context` |
+| `DB_PATH` | 漏洞数据库路径 | `{CONTEXT_DIR}/scan.db` |
 
 ### 路径确定流程
 
@@ -27,8 +28,10 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 2. 验证 PROJECT_ROOT 存在且为目录，否则报错并停止
 3. 拼接 SCAN_OUTPUT = {PROJECT_ROOT}/scan-results
 4. 拼接 CONTEXT_DIR = {SCAN_OUTPUT}/.context
-5. 创建目录: mkdir -p {CONTEXT_DIR}
-6. 后续所有子 Agent 调用时传递这三个路径
+5. 拼接 DB_PATH = {CONTEXT_DIR}/scan.db
+6. 创建目录: mkdir -p {CONTEXT_DIR}
+7. 初始化数据库: vuln-db command=init db_path={DB_PATH}
+8. 后续所有子 Agent 调用时传递这四个路径
 ```
 
 ### 调用子 Agent 时传递路径
@@ -42,6 +45,7 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 - 项目根目录: {PROJECT_ROOT}
 - 扫描输出目录: {SCAN_OUTPUT}
 - 上下文目录: {CONTEXT_DIR}
+- 数据库路径: {DB_PATH}
 
 ## 任务
 [具体任务内容...]
@@ -49,20 +53,33 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 
 ## 上下文文件一览
 
+### 数据库（漏洞数据）
+
+| 资源 | 写入者 | 读取者 | 用途 |
+|------|--------|--------|------|
+| `scan.db` (SQLite) | 所有 Agent（通过 `vuln-db` 工具） | 所有 Agent | 候选漏洞 + 验证结果 + Agent 日志 |
+
+漏洞数据的 Schema 和 `vuln-db` 工具的使用方式，参考 `@skill:vulnerability-db`。
+
+### JSON 文件（项目模型和日志）
+
 | 文件 | 写入者 | 读取者 | 用途 |
 |------|--------|--------|------|
 | `project_model.json` | @architecture | 所有 Scanner、@verification、@reporter | 项目结构和高风险文件 |
 | `call_graph.json` | @architecture | 所有 Scanner、@verification | 函数调用关系图 |
-| `candidates_df.json` | @dataflow-scanner（通过 merge-json tool） | @verification | 数据流候选漏洞列表 |
-| `candidates_df_*.json` | @dataflow-module-scanner | @dataflow-scanner | 模块级数据流扫描中间结果 |
-| `candidates_sec.json` | @security-auditor（通过 merge-json tool） | @verification | 安全审计候选漏洞列表 |
-| `candidates_sec_*.json` | @security-module-scanner | @security-auditor | 模块级安全审计中间结果 |
-| `verified.json` | @verification（通过 merge-json tool） | @reporter | 验证后的漏洞 |
-| `verified_*.json` | @verification-worker | @verification | 模块级验证中间结果 |
 | `scan_log.json` | @orchestrator | 用户/调试 | Agent 调用日志和扫描统计 |
 | `scoring_rules.json` | 用户（可选） | @verification、@verification-worker | 自定义置信度评分规则 |
 
+### 输出文件
+
+| 文件 | 写入者 | 用途 |
+|------|--------|------|
+| `report.md` | @reporter（通过 `report-generator` 工具 + 补充） | 最终漏洞报告 |
+| `threat_analysis_report.md` | @architecture | 威胁分析报告 |
+
 ## JSON 格式规范（必须遵守）
+
+以下规范适用于仍在使用的 JSON 文件（`project_model.json`、`call_graph.json`、`scan_log.json`）。
 
 ### 写入规则
 
@@ -151,7 +168,7 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 }
 ```
 
-**新增字段说明**：
+**字段说明**：
 
 | 字段 | 所属 | 说明 |
 |------|------|------|
@@ -186,163 +203,22 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 }
 ```
 
-### candidates_df.json / candidates_sec.json
+### 漏洞数据（数据库）
 
-```json
-{
-  "vulnerabilities": [
-    {
-      "id": "VULN-DF-001",
-      "type": "buffer_overflow|use_after_free|command_injection|...",
-      "severity": "Critical|High|Medium|Low",
-      "cwe": "CWE-XXX",
-      "file": "src/path/file.c",
-      "line_start": 250,
-      "line_end": 255,
-      "function": "function_name",
-      "code_snippet": "actual code from file",
-      "data_flow": [
-        {"file": "src/a.c", "line": 50, "description": "[SOURCE] 说明"},
-        {"file": "src/b.c", "line": 80, "description": "[SINK] 说明"}
-      ],
-      "source_agent": "dataflow-scanner|security-auditor",
-      "source_module": "模块名称",
-      "pre_validated": true,
-      "cross_module": false,
-      "modules_involved": ["模块A", "模块B"]
-    }
-  ]
-}
-```
+候选漏洞和验证结果存储在 SQLite 数据库中，不再使用 JSON 文件。
 
-**字段说明**：
+关于数据库 Schema、字段说明、以及 `vuln-db` 工具的使用方式，参考 `@skill:vulnerability-db`。
 
-| 字段 | 必填 | 说明 |
-|------|------|------|
-| `source_agent` | 是 | Scanner 输出时为字符串（`"dataflow-scanner"` 或 `"security-auditor"`）。Verification 去重合并后转为数组 `source_agents`（如 `["dataflow-scanner", "security-auditor"]`） |
-| `cross_module` | 是 | 是否为跨模块漏洞（默认 `false`） |
-| `modules_involved` | 否 | 仅 `cross_module: true` 时填写，列出涉及的所有模块名称 |
+**各 Agent 的数据库交互模式概要**：
 
-### 模块中间文件（candidates_df_{模块简称}.json / candidates_sec_{模块简称}.json）
-
-```json
-{
-  "module": "模块名称",
-  "vulnerabilities": [
-    {
-      "id": "VULN-DF-IPC-001",
-      "type": "buffer_overflow",
-      "severity": "High",
-      "cwe": "CWE-120",
-      "file": "src/ipc/handler.cpp",
-      "line_start": 250,
-      "line_end": 255,
-      "function": "RecvMessage",
-      "code_snippet": "...",
-      "data_flow": [...],
-      "source_agent": "dataflow-scanner",
-      "source_module": "IPC通信模块",
-      "pre_validated": true
-    }
-  ]
-}
-```
-
-**模块简称规则**：取模块名的英文部分，全部小写，空格替换为 `_`。若多个模块简称相同，追加数字后缀（如 `network`、`network_2`）。
-
-### verified.json
-
-**统一使用 `vulnerabilities` 单数组结构**，每个条目通过 `status` 字段标识分类，便于 `merge-json` 工具一次合并。
-
-```json
-{
-  "scan_summary": {
-    "total_candidates": 25,
-    "deduplicated_candidates": 22,
-    "confirmed": 5,
-    "likely": 8,
-    "possible": 4,
-    "false_positives": 5,
-    "veto_count": 3
-  },
-  "vulnerabilities": [
-    {
-      "id": "VULN-DF-001",
-      "confidence": 85,
-      "status": "CONFIRMED",
-      "original_severity": "Critical",
-      "verified_severity": "Critical",
-      "source_agents": ["dataflow-scanner", "security-auditor"],
-      "scoring_details": {
-        "base": 30,
-        "reachability": 30,
-        "controllability": 15,
-        "mitigations": -10,
-        "context": 0,
-        "cross_file": 0
-      },
-      "veto_applied": false,
-      "veto_reason": null,
-      "original": {}
-    },
-    {
-      "id": "VULN-SEC-003",
-      "confidence": 0,
-      "status": "FALSE_POSITIVE",
-      "original_severity": "Medium",
-      "verified_severity": "Medium",
-      "source_agents": ["security-auditor"],
-      "scoring_details": null,
-      "veto_applied": true,
-      "veto_reason": "test_code",
-      "reason": "测试代码中的硬编码凭证",
-      "original": {}
-    }
-  ]
-}
-```
-
-**字段说明**：
-
-| 字段 | 说明 |
-|------|------|
-| `status` | 验证状态：`CONFIRMED`/`LIKELY`/`POSSIBLE`/`FALSE_POSITIVE` |
-| `original_severity` | Scanner 原始评估的严重性 |
-| `verified_severity` | 验证后根据置信度重评估的严重性 |
-| `source_agents` | 数组，记录发现该漏洞的 Scanner（去重合并后可能有多个来源） |
-| `veto_applied` | 布尔值，是否被一票否决（详见 `@skill:confidence-scoring`） |
-| `veto_reason` | 一票否决原因（仅 `veto_applied: true` 时存在）：`chain_broken`/`unreachable`/`test_code` |
-| `deduplicated_candidates` | 去重后的候选漏洞数（`scan_summary` 中） |
-| `veto_count` | 被一票否决的漏洞数（`scan_summary` 中） |
-
-**设计说明**：使用统一的 `vulnerabilities` 数组（而非 `confirmed`/`likely`/`possible`/`false_positives` 四个独立数组），使得 `merge-json` 工具可以一次合并（key=`vulnerabilities`），合并后协调者只需遍历数组按 `status` 统计 `scan_summary`。
-
-### 验证中间文件（verified_{模块简称}.json）
-
-结构与 `verified.json` 一致，`scan_summary` 仅统计该批次的漏洞。
-
-```json
-{
-  "scan_summary": {
-    "total_candidates": 5,
-    "confirmed": 2,
-    "likely": 1,
-    "possible": 1,
-    "false_positives": 1,
-    "veto_count": 1
-  },
-  "vulnerabilities": [
-    {
-      "id": "VULN-DF-001",
-      "status": "CONFIRMED",
-      "confidence": 85,
-      "...": "..."
-    }
-  ]
-}
-```
-
-**模块简称规则**：取模块名的英文部分，全部小写，空格替换为 `_`。若多个模块简称相同，追加数字后缀（如 `network`、`network_2`）。
+| Agent | 操作 | 说明 |
+|-------|------|------|
+| Orchestrator | `vuln-db init` | 创建数据库 |
+| Scanner Worker | `vuln-db insert` | 写入候选漏洞 |
+| Scanner Coordinator | `vuln-db stats` | 验证扫描完整性 |
+| Verification Coordinator | `vuln-db dedup` + `vuln-db query` | 去重 + 获取候选列表 |
+| Verification Worker | `vuln-db query` + `vuln-db batch-update` | 获取批次 + 写回验证结果 |
+| Reporter | `report-generator` 工具 | 程序化生成完整报告 |
 
 ### scan_log.json
 
@@ -361,7 +237,7 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
       "end_time": "ISO8601",
       "duration_seconds": 325,
       "status": "success|failed|skipped",
-      "outputs": ["file1.json", "file2.md"],
+      "outputs": ["scan.db", "report.md"],
       "error": null
     }
   ],

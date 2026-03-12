@@ -30,6 +30,7 @@ permission:
 - **项目根目录** (`PROJECT_ROOT`): 源代码所在位置
 - **扫描输出目录** (`SCAN_OUTPUT`): 报告输出位置
 - **上下文目录** (`CONTEXT_DIR`): JSON 文件读写位置
+- **数据库路径** (`DB_PATH`): 漏洞数据库 `{CONTEXT_DIR}/scan.db`
 
 ### 读取路径
 | 内容 | 路径 |
@@ -38,10 +39,10 @@ permission:
 | 调用图 | `{CONTEXT_DIR}/call_graph.json` |
 | 源代码 | `{PROJECT_ROOT}/...` |
 
-### 写入路径
-| 内容 | 路径 |
-|------|------|
-| 候选漏洞 | `{CONTEXT_DIR}/candidates_sec.json`（通过 `merge-json` 工具生成） |
+### 数据写入
+候选漏洞通过 `vuln-db insert` 工具写入 SQLite 数据库（`{DB_PATH}`），不再写入 JSON 文件。
+
+关于数据库 Schema 和工具用法，参考 `@skill:vulnerability-db`。
 
 ### 传递给子 Agent
 调用 `@security-module-scanner` 时，**必须传递路径上下文**：
@@ -52,6 +53,7 @@ permission:
 ## 路径上下文
 - 项目根目录: {PROJECT_ROOT}
 - 上下文目录: {CONTEXT_DIR}
+- 数据库路径: {DB_PATH}
 
 ## 模块信息
 ...
@@ -61,19 +63,19 @@ permission:
 
 ```
 security-auditor (协调者 - 你)
-    ├── @security-module-scanner (模块1)
-    ├── @security-module-scanner (模块2)
-    ├── @security-module-scanner (模块N)
-    └── 跨模块安全分析 + merge-json 合并
+    ├── @security-module-scanner (模块1) → vuln-db insert
+    ├── @security-module-scanner (模块2) → vuln-db insert
+    ├── @security-module-scanner (模块N) → vuln-db insert
+    └── 跨模块安全分析 → vuln-db insert
 ```
 
 ## 核心职责
 
 1. **读取项目模型**: 从 `project_model.json` 获取模块列表
 2. **模块调度**: 为每个模块调用 `@security-module-scanner`
-3. **结果收集**: 记录各模块写入的文件路径和跨模块安全提示
+3. **结果收集**: 记录各模块的审计统计和跨模块安全提示（漏洞详情已写入数据库）
 4. **跨模块安全分析**: 分析模块间的认证绕过、权限传递等安全逻辑
-5. **输出合并**: 使用 `merge-json` 工具合并所有模块中间文件到 `candidates_sec.json`
+5. **结果验证**: 调用 `vuln-db stats` 确认所有候选漏洞已入库
 
 ## 接收输入
 
@@ -103,26 +105,28 @@ security-auditor (协调者 - 你)
 
 **扫描可能中途中断，必须在调度前检测已完成的模块，避免重复审计。**
 
-对排序后的模块列表逐一检查 `{CONTEXT_DIR}/candidates_sec_{模块简称}.json` 是否已存在且非空：
+调用 `vuln-db query` 检查数据库中各模块是否已有 security-auditor 的候选数据：
+
+```
+vuln-db command=query db_path={DB_PATH} phase=candidate source_agent=security-auditor
+```
+
+从返回结果中按 `source_module` 分组，确定哪些模块已完成：
 
 ```
 断点续扫检测:
-├── candidates_sec_auth.json    存在 (5KB)  → 跳过 认证授权模块
-├── candidates_sec_crypto.json  不存在      → 待审计
-├── candidates_sec_network.json 不存在      → 待审计
-└── candidates_sec_config.json  不存在      → 待审计
+├── 认证授权模块: DB 中已有 5 条候选 → 跳过
+├── 加密安全模块: DB 中无数据 → 待审计
+├── 网络通信模块: DB 中无数据 → 待审计
+└── 配置管理模块: DB 中无数据 → 待审计
 
-已完成: 1 个模块（从中间文件恢复）
+已完成: 1 个模块（从数据库恢复）
 待审计: 3 个模块
 ```
 
 **跳过规则**：
-- 文件存在且大小 > 0 → 该模块已完成，跳过
-- 文件不存在或大小为 0 → 该模块未完成，需要调度子 Agent
-
-**跳过的模块仍然需要**：
-1. 读取其中间文件提取跨模块安全提示，用于阶段 5 的跨模块分析
-2. 将文件路径加入合并列表，用于阶段 6 的 merge-json 合并
+- 该模块在 DB 中有 `source_agent=security-auditor` 的候选数据 → 已完成，跳过
+- 无数据 → 未完成，需要调度子 Agent
 
 ### 阶段 3: 调度子 Agent
 
@@ -136,6 +140,7 @@ security-auditor (协调者 - 你)
 ## 路径上下文
 - 项目根目录: {PROJECT_ROOT}
 - 上下文目录: {CONTEXT_DIR}
+- 数据库路径: {DB_PATH}
 
 ## 模块信息
 - 模块名: [模块名称]
@@ -157,27 +162,16 @@ security-auditor (协调者 - 你)
 ## 审计要求
 1. 审查认证授权、密码学相关安全问题，优先审计 trust_level 为 untrusted_network/untrusted_local 的入口关联代码
 2. 标记可能涉及跨模块的安全逻辑（认证绕过路径、凭证传递等）
-3. **将漏洞详情写入 `{CONTEXT_DIR}/candidates_sec_{模块简称}.json`**
-4. 返回文本只包含：审计统计、写入的文件路径、跨模块安全提示
+3. **使用 `vuln-db insert` 将候选漏洞写入数据库**
+4. 返回文本只包含：审计统计、跨模块安全提示（不含完整漏洞详情）
 ```
 
 ### 阶段 4: 收集子 Agent 结果
 
-每个子 Agent 返回的文本**只包含摘要**（漏洞详情已写入文件）：
+每个子 Agent 返回的文本**只包含摘要**（漏洞详情已写入数据库）：
 
-1. **写入文件路径**: 记录该模块写入的中间文件路径
+1. **审计统计**: 该模块发现的候选漏洞数量
 2. **跨模块安全提示**: 认证绕过、凭证传递等跨模块风险
-
-维护一个**完整模块文件路径列表**（包含续扫恢复的 + 本次新审计的），用于合并：
-```
-全部模块文件（含恢复 + 新审计）:
-- {CONTEXT_DIR}/candidates_sec_auth.json    ← 续扫恢复
-- {CONTEXT_DIR}/candidates_sec_crypto.json  ← 本次审计
-- {CONTEXT_DIR}/candidates_sec_network.json ← 本次审计
-- {CONTEXT_DIR}/candidates_sec_config.json  ← 本次审计
-```
-
-对于续扫恢复的模块，需要读取其中间文件提取跨模块安全提示，补充到跨模块分析列表中。
 
 ### 阶段 5: 跨模块安全分析
 
@@ -190,27 +184,23 @@ security-auditor (协调者 - 你)
 5. **降级攻击分析**：检查是否存在从安全协议/算法回退到不安全版本的路径
 6. **构造跨模块漏洞**：将发现的跨模块安全问题记录为漏洞条目，标记 `cross_module: true` 和 `modules_involved`
 
-将跨模块安全漏洞写入 `{CONTEXT_DIR}/candidates_sec_cross_module.json`。
+将跨模块安全漏洞通过 `vuln-db insert` 写入数据库，设置 `cross_module: true` 和 `modules_involved`。
 
-### 阶段 6: 使用 merge-json 工具合并输出
+### 阶段 6: 验证审计结果
 
-**使用 `merge-json` 工具将所有模块中间文件合并为最终输出。**
-
-调用方式：
+调用 `vuln-db stats` 确认所有候选漏洞已入库：
 
 ```
-使用 merge-json 工具:
-- directory: {CONTEXT_DIR}
-- pattern: candidates_sec_*.json
-- output: {CONTEXT_DIR}/candidates_sec.json
-- key: vulnerabilities
+vuln-db command=stats db_path={DB_PATH} phase=candidate
 ```
 
-**合并后必须调用 `validate-json` 工具校验** `candidates_sec.json`：
-- PASS → 校验通过，向 Orchestrator 报告完成
-- FAIL → 根据错误信息修复，重新写入并再次校验（最多重试 2 次）
+检查返回的统计信息，确认各模块的漏洞数量与子 Agent 报告一致。
 
-**不需要在对话中输出完整的合并 JSON 内容。**
+同时调用 `vuln-db log` 记录完成状态：
+
+```
+vuln-db command=log db_path={DB_PATH} agent_name=security-auditor status=success item_count=[总候选数]
+```
 
 ## 进度报告
 
@@ -236,4 +226,4 @@ security-auditor (协调者 - 你)
 1. **不要直接审计文件** - 你是协调者，具体审计由子 Agent 完成
 2. **保持上下文精简** - 只传递必要信息给子 Agent
 3. **跨模块安全分析是你的核心价值** - 认证绕过路径常跨越多个模块
-4. **使用 merge-json 工具合并** - 绝不手动拼接 JSON，避免输出过大失败
+4. **使用 vuln-db 工具** - 所有漏洞数据通过数据库读写，不再使用 JSON 中间文件

@@ -27,19 +27,17 @@ permission:
 协调者会在调用时传递：
 - **项目根目录** (`PROJECT_ROOT`): 源代码所在位置
 - **上下文目录** (`CONTEXT_DIR`): JSON 文件读写位置
+- **数据库路径** (`DB_PATH`): 漏洞数据库 `{CONTEXT_DIR}/scan.db`
 
-### 写入路径
-| 内容 | 路径 |
-|------|------|
-| 批次验证结果 | `{CONTEXT_DIR}/verified_{批次简称}.json` |
+### 数据读写
+- 读取：使用 `vuln-db query ids=ID1,ID2,...` 从数据库获取候选漏洞详情
+- 写入：使用 `vuln-db batch-update` 将验证结果写回数据库
 
-**批次简称规则**：取模块名的英文部分，全部小写，空格替换为 `_`。例如：
-- "IPC通信模块" → `ipc`
-- "插件系统模块" → `plugin`
+关于数据库 Schema 和工具用法，参考 `@skill:vulnerability-db`。
 
 ### 重要
 - 所有文件路径在输出中都使用**相对于项目根目录**的格式
-- **验证详情必须写入中间文件，不得在返回文本中完整输出**
+- **验证详情必须通过 `vuln-db batch-update` 写入数据库，不得在返回文本中完整输出**
 
 ## 接收输入
 
@@ -48,13 +46,13 @@ permission:
 ### 路径上下文（必须）
 - **项目根目录**: 源代码所在位置
 - **上下文目录**: JSON 文件读写位置
+- **数据库路径**: 漏洞数据库路径
 
 ### 验证批次信息
 1. **批次名称**: 当前批次的模块名
-2. **批次简称**: 用于中间文件命名
-3. **候选漏洞列表**: 该批次需要验证的漏洞 JSON 数组
-4. **调用图子集**: 模块内的函数调用关系
-5. **评分规则**: 自定义规则或说明使用默认规则
+2. **漏洞 ID 列表**: 该批次需要验证的漏洞 ID（逗号分隔）
+3. **调用图子集**: 模块内的函数调用关系
+4. **评分规则**: 自定义规则或说明使用默认规则
 
 ## 验证优先级
 
@@ -179,77 +177,61 @@ permission:
 - FALSE_POSITIVE: X（其中一票否决: X）
 ```
 
-## 结构化输出（必须先写文件）
+## 获取候选漏洞
 
-验证完成后，**首先**将所有验证结果写入 `{CONTEXT_DIR}/verified_{批次简称}.json`。
+首先使用 `vuln-db query` 从数据库获取分配的候选漏洞详情：
 
-关于 JSON 格式规范和 verified.json 的 Schema 定义，参考 `@skill:agent-communication`。
+```
+vuln-db command=query db_path={DB_PATH} ids=VULN-DF-MEM-001,VULN-DF-MEM-002,...
+```
 
-**写入后必须调用 `validate-json` 工具校验**：
-- PASS → 校验通过，继续返回摘要
-- FAIL → 根据错误信息修复 JSON 内容，重新写入文件并再次校验（最多重试 2 次）
+返回的 JSON 数组包含每个漏洞的完整信息（type、severity、file、line_start、code_snippet、data_flow 等）。
 
-### 中间文件结构
+## 结构化输出（必须写入数据库）
 
-`verified_{批次简称}.json` 使用统一的 `vulnerabilities` 数组，每个条目通过 `status` 字段标识分类：
+验证完成后，使用 `vuln-db batch-update` 将所有验证结果写回数据库。
 
-```json
-{
-  "scan_summary": {
-    "total_candidates": 5,
-    "confirmed": 2,
-    "likely": 1,
-    "possible": 1,
-    "false_positives": 1,
-    "veto_count": 1
-  },
-  "vulnerabilities": [
-    {
-      "id": "VULN-DF-001",
+关于数据库字段和工具用法，参考 `@skill:vulnerability-db`。
+
+```
+vuln-db command=batch-update db_path={DB_PATH} updates='[
+  {
+    "id": "VULN-DF-001",
+    "fields": {
       "confidence": 85,
       "status": "CONFIRMED",
       "original_severity": "Critical",
       "verified_severity": "Critical",
-      "source_agents": ["dataflow-scanner"],
-      "scoring_details": {
-        "base": 30,
-        "reachability": 30,
-        "controllability": 15,
-        "mitigations": -10,
-        "context": 0,
-        "cross_file": 0
-      },
+      "scoring_details": {"base": 30, "reachability": 30, "controllability": 15, "mitigations": -10, "context": 0, "cross_file": 0},
       "veto_applied": false,
-      "veto_reason": null,
-      "original": {}
-    },
-    {
-      "id": "VULN-SEC-003",
+      "verification_reason": "确认为真实漏洞，数据流路径完整"
+    }
+  },
+  {
+    "id": "VULN-SEC-003",
+    "fields": {
       "confidence": 0,
       "status": "FALSE_POSITIVE",
       "original_severity": "Medium",
       "verified_severity": "Medium",
-      "source_agents": ["security-auditor"],
-      "scoring_details": null,
       "veto_applied": true,
       "veto_reason": "test_code",
-      "reason": "测试代码中的硬编码凭证",
-      "original": {}
+      "verification_reason": "测试代码中的硬编码凭证"
     }
-  ]
-}
+  }
+]'
 ```
 
 ### 写入说明
 
-1. 所有漏洞放入统一的 `vulnerabilities` 数组，通过 `status` 字段区分类别
-2. `status` 为 `FALSE_POSITIVE` 的漏洞记录但不报告，用于调优分析
-3. 每个漏洞保留完整的 `scoring_details` 便于追溯（被一票否决的漏洞 `scoring_details` 为 `null`）
-4. `original` 字段保留 Scanner 输出的原始漏洞信息
+1. 每个漏洞通过 `status` 字段标识验证结果：`CONFIRMED`/`LIKELY`/`POSSIBLE`/`FALSE_POSITIVE`
+2. `batch-update` 自动将 `phase` 设为 `verified`
+3. 每个漏洞保留完整的 `scoring_details` 便于追溯（被一票否决的漏洞 `scoring_details` 可为 `null`）
+4. `verification_reason` 字段记录验证结论说明
 
 ## 返回给协调者的内容
 
-**验证详情已写入文件，返回文本中只包含摘要**，不重复输出验证详情：
+**验证详情已写入数据库，返回文本中只包含摘要**，不重复输出验证详情：
 
 ```
 === 批次验证完成: [批次名称] ===
@@ -261,7 +243,7 @@ permission:
 - POSSIBLE: X
 - FALSE_POSITIVE: X（其中一票否决: X）
 - 严重性重评估: X 个漏洞被调整
-- 写入文件: {CONTEXT_DIR}/verified_{批次简称}.json
+- 已写入数据库: {DB_PATH}
 
 === 结束 ===
 ```
@@ -270,6 +252,6 @@ permission:
 
 1. **聚焦批次内验证** - 跨模块漏洞的全局路径验证由协调者处理
 2. **自主补充信息** - 信息不足时直接读取源码，不要请求协调者补充
-3. **先写文件再返回摘要** - 验证详情写入 JSON 文件，返回文本只含统计
+3. **先写数据库再返回摘要** - 验证详情通过 `vuln-db batch-update` 写入数据库，返回文本只含统计
 4. **一票否决优先** - 对每个漏洞先执行一票否决检查，通过后再做完整评分
 5. **严重性重评估** - 验证完成后根据置信度调整 severity，保留原始值和调整值

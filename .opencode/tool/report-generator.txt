@@ -1,0 +1,23 @@
+Generate a complete Markdown vulnerability report from the SQLite database.
+
+This tool programmatically produces a full report with ALL verified vulnerabilities, ensuring zero data loss. It replaces the previous approach where an LLM read a large JSON file and inevitably truncated the output.
+
+The generated report includes:
+1. Scan summary - severity distribution table, verification status table (computed via SQL GROUP BY)
+2. Top 10 critical vulnerabilities - sorted by severity then confidence
+3. Attack surface analysis - from project_model.json entry_points
+4. Complete vulnerability details - grouped by verified_severity (Critical → High → Medium → Low), each with ID, type, CWE, location, description, confidence, data flow, code snippet
+5. Module distribution - cross-tabulation of modules × severity
+6. CWE distribution - count by CWE ID
+
+After generation, the Reporter LLM should:
+- Add an executive summary paragraph at the top
+- Enrich Top 5 vulnerabilities with deeper analysis (reading source code for context)
+- Add a remediation recommendations section
+
+Parameters:
+- db_path: Absolute path to the SQLite database file (scan.db)
+- project_model_path: Absolute path to project_model.json
+- output_path: Absolute path for the output Markdown report
+- min_confidence: Minimum confidence threshold (default: 40)
+- code_root: PROJECT_ROOT path, used to label relative file paths in the report
