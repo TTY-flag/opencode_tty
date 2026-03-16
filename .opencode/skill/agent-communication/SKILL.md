@@ -1,6 +1,6 @@
 ---
 name: agent-communication
-description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定义、数据库交互协议。所有参与漏洞扫描的 Agent 都应参考此 Skill。
+description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定义、数据库交互协议。所有参与漏洞扫描的 Agent 都应参考此 Skill。支持 C/C++ 和 Python 混合项目。
 ---
 
 ## Use this when
@@ -123,7 +123,7 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
   "total_files": 50,
   "total_lines": 25000,
   "project_profile": {
-    "project_type": "network_service|cli_tool|library|kernel_module|embedded|gui_application",
+    "project_type": "network_service|cli_tool|library|kernel_module|embedded|gui_application|web_application|cli_tool_python",
     "deployment_model": "描述项目的典型部署方式（如：Linux 服务器上的守护进程、用户本地执行的命令行工具等）",
     "trust_boundaries": [
       {
@@ -138,12 +138,14 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
     {
       "name": "模块名称",
       "path": "src/module",
+      "language": "c_cpp|python|mixed",
       "components": ["file1.cpp", "file2.cpp"]
     }
   ],
   "files": [
     {
       "path": "src/network.c",
+      "language": "c_cpp|python",
       "risk": "Critical|High|Medium|Low",
       "module": "network",
       "lines": 450,
@@ -155,7 +157,7 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
       "file": "src/server.c",
       "line": 89,
       "function": "handle_request",
-      "type": "network|file|env|cmdline|stdin",
+      "type": "network|file|env|cmdline|stdin|web_route|rpc|decorator",
       "trust_level": "untrusted_network|untrusted_local|semi_trusted|trusted_admin|internal",
       "justification": "TCP 0.0.0.0:8080 上的公网接口，远程客户端可直接连接",
       "description": "接收HTTP请求"
@@ -173,9 +175,11 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 | 字段 | 所属 | 说明 |
 |------|------|------|
 | `project_profile` | 顶层 | 项目定位信息，由 Architecture Agent 在攻击面识别前填写 |
-| `project_profile.project_type` | project_profile | 项目类型枚举：`network_service`（网络服务）、`cli_tool`（CLI 工具）、`library`（库）、`kernel_module`（内核模块）、`embedded`（嵌入式）、`gui_application`（GUI 应用） |
+| `project_profile.project_type` | project_profile | 项目类型枚举：`network_service`（网络服务）、`cli_tool`（CLI 工具）、`library`（库）、`kernel_module`（内核模块）、`embedded`（嵌入式）、`gui_application`（GUI 应用）、`web_application`（Web 应用）、`cli_tool_python`（Python CLI 工具） |
 | `project_profile.deployment_model` | project_profile | 项目的典型部署方式描述 |
 | `project_profile.trust_boundaries` | project_profile | 系统信任边界列表，标注每条边界两侧的信任差异 |
+| `language` (modules) | modules[] | 模块语言类型：`c_cpp`（C/C++）、`python`（Python）、`mixed`（混合），由 Architecture Agent 分析后填写，决定后续调度哪个语言的 Scanner Worker |
+| `language` (files) | files[] | 文件语言类型：`c_cpp`（C/C++ 源文件）、`python`（Python 源文件），由文件扩展名决定 |
 | `trust_level` | entry_points[] | 入口点信任等级，决定该入口是否值得重点扫描 |
 | `justification` | entry_points[] | 入口点可达性理由，要求 AI 解释为什么此入口是真实攻击面 |
 
@@ -242,7 +246,7 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
     }
   ],
   "summary": {
-    "project_type": "network_service|cli_tool|library|kernel_module|embedded|gui_application",
+    "project_type": "network_service|cli_tool|library|kernel_module|embedded|gui_application|web_application|cli_tool_python",
     "total_files_scanned": 50,
     "total_lines": 25000,
     "candidates_found": 13,

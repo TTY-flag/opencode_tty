@@ -1,6 +1,6 @@
 ---
 name: cross-file-analysis
-description: 跨文件代码分析方法论。当需要追踪函数调用、数据流或符号在多个文件间的传递时使用此 Skill。定义了 LSP/Call Graph/Grep 三层工具优先级和使用方法。
+description: 跨文件代码分析方法论。当需要追踪函数调用、数据流或符号在多个文件间的传递时使用此 Skill。定义了 LSP/Call Graph/Grep 三层工具优先级和使用方法。支持 C/C++ 和 Python。
 ---
 
 ## Use this when
@@ -24,7 +24,7 @@ description: 跨文件代码分析方法论。当需要追踪函数调用、数�
 
 在开始分析前，**必须先检测 LSP 是否正常工作**：
 
-1. **测试方法**：对项目中任意 `.c` 或 `.cpp` 文件中的函数调用使用 `Go to Definition`
+1. **测试方法**：对项目中任意源文件（`.c`/`.cpp` 或 `.py`）中的函数调用使用 `Go to Definition`
 2. **判断标准**：
    - LSP 可用：成功跳转到函数定义位置
    - LSP 不可用：无响应、超时、或返回错误
@@ -33,6 +33,8 @@ description: 跨文件代码分析方法论。当需要追踪函数调用、数�
    - LSP 不可用 → 完全使用 grep 回退方案
 
 **将检测结果记录到 `project_model.json` 的 `lsp_available` 字段**，供后续 Agent 参考。
+
+> **Python 项目注意**：Python LSP（如 Pylance/Pyright）对动态类型的支持有限，`getattr()`、`**kwargs` 等动态特性可能无法正确解析。此时需配合 grep 回退。
 
 ## LSP 操作指南
 
@@ -62,6 +64,7 @@ description: 跨文件代码分析方法论。当需要追踪函数调用、数�
 
 在模块内至少追踪 **3 层调用链**：
 
+**C/C++ 示例**：
 ```
 recv() [handler.cpp]
   → process_data() [handler.cpp]
@@ -69,7 +72,17 @@ recv() [handler.cpp]
       → strcpy() [parser.cpp] ← SINK
 ```
 
+**Python 示例**：
+```
+@app.route("/search") [views.py]
+  → search_db(query) [views.py]
+    → build_query(keyword) [db.py]
+      → cursor.execute(sql) [db.py] ← SINK
+```
+
 ## 跨文件追踪场景
+
+### C/C++ 跨文件追踪
 
 | 场景 | 方法 |
 |------|------|
@@ -79,6 +92,19 @@ recv() [handler.cpp]
 | 结构体字段 | LSP 或 grep `"结构体->字段"` / `"结构体.字段"` |
 | 回调函数 | grep 查找函数指针赋值和调用位置 |
 | 宏展开 | 优先用 LSP（能正确展开），grep 作为回退 |
+
+### Python 跨文件追踪
+
+| 场景 | 方法 |
+|------|------|
+| 模块导入 | grep `from module import func` / `import module` 追踪导入链 |
+| 类继承 | LSP Go to Definition 确认基类位置；grep `class XXX(BaseClass)` |
+| 装饰器链 | grep `@decorator_name` 找到装饰器定义，追踪 wrapper 逻辑 |
+| 包结构 | 读取 `__init__.py` 确认模块导出；追踪 `from . import` 相对导入 |
+| 类属性/实例属性 | LSP 或 grep `self.attr` / `cls.attr` 的读写位置 |
+| 模块级变量 | grep `settings.VAR` / `config.VAR` 的读写位置 |
+| 动态调用 | grep `getattr(obj, "method")` / `globals()["func"]` |
+| 中间件/信号 | grep `middleware` / `signal.connect` 追踪请求处理链 |
 
 ## 跨文件验证步骤
 
@@ -104,6 +130,7 @@ recv() [handler.cpp]
 
 ### 验证示例
 
+**C/C++ 验证示例**：
 ```
 漏洞路径: network.c → server.c → request.c
 
@@ -122,6 +149,26 @@ recv() [handler.cpp]
   ✓ request.c:95 strcpy(header, input)
   ✗ 无边界检查保护
   → 路径可达，但受到 1000 字节限制
+```
+
+**Python 验证示例**：
+```
+漏洞路径: views.py → services.py → db.py
+
+[步骤1] 检查 views.py → services.py
+  ✓ views.py:25 调用 search_users(request.args["q"])
+  ✓ services.py:10 定义 search_users(keyword)
+  ✓ 参数直接传递，无清洗
+
+[步骤2] 检查 services.py → db.py
+  ✓ services.py:15 调用 run_query(keyword)
+  ✓ db.py:30 定义 run_query(term)
+  ✗ 无输入验证或参数化
+
+[步骤3] 检查 db.py 漏洞点
+  ✓ db.py:35 cursor.execute(f"SELECT * FROM users WHERE name = '{term}'")
+  ✗ f-string 直接拼接 SQL，未使用参数化查询
+  → 路径可达，确认 SQL 注入
 ```
 
 ## 跨模块数据流标记

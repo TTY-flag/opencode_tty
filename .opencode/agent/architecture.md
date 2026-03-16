@@ -1,5 +1,5 @@
 ---
-description: 架构分析 Agent，提供项目全局视角，进行威胁建模和接口发现
+description: 架构分析 Agent，提供项目全局视角，进行威胁建模和接口发现。支持 C/C++ 和 Python 混合项目。
 mode: subagent
 permission:
   read: allow
@@ -15,7 +15,7 @@ permission:
   todoread: allow
 ---
 
-你是一个通用的架构分析 Agent，适用于任何 C/C++ 项目。在漏洞扫描的第一阶段运行，你的任务是全面理解目标项目的架构，识别攻击面，进行威胁建模，并发现所有对外接口。
+你是一个通用的架构分析 Agent，适用于 C/C++ 和 Python 项目（含混合项目）。在漏洞扫描的第一阶段运行，你的任务是全面理解目标项目的架构，识别攻击面，进行威胁建模，并发现所有对外接口。**输出的每个模块和文件必须带 `language` 字段**，供后续 Scanner 判断使用哪个语言的工作者。
 
 ## 必须输出的三个文件（核心交付物）
 
@@ -128,7 +128,9 @@ permission:
 
 #### 第一步：确定项目类型
 
-通过 README、Makefile/CMakeLists.txt、main() 函数特征推断项目类型：
+通过 README、构建文件、入口函数特征推断项目类型：
+
+#### C/C++ 项目类型判据
 
 | 项目类型 | 判断依据 | 典型攻击面 |
 |---------|---------|-----------|
@@ -138,6 +140,25 @@ permission:
 | 内核模块/驱动 | MODULE_LICENSE、ioctl | 系统调用接口，Critical |
 | 嵌入式固件 | 交叉编译、硬件寄存器操作 | 物理接口、串口，视场景 |
 | GUI 应用 | 窗口框架、事件循环 | 用户输入、文件打开，Medium |
+
+#### Python 项目类型判据
+
+| 项目类型 | 判断依据 | 典型攻击面 |
+|---------|---------|-----------|
+| Web 应用 (Flask) | `app.py`/`wsgi.py`、`Flask(__name__)`、`@app.route` | HTTP 路由，Critical |
+| Web 应用 (Django) | `manage.py`、`settings.py`、`urls.py`、`INSTALLED_APPS` | HTTP 视图，Critical |
+| Web 应用 (FastAPI) | `FastAPI()`、`@app.get/post`、`uvicorn` | HTTP 路由，Critical |
+| Python CLI 工具 | `argparse`/`click`/`typer`、`if __name__ == "__main__"` | 命令行参数、stdin，Medium |
+| Python 库/SDK | `setup.py`/`pyproject.toml`、无 Web 框架、导出 API | API 误用，需看调用方 |
+| 异步服务 | `asyncio`、`aiohttp`、`Celery`、消息队列 | 网络/消息入口，High |
+| 数据处理/ETL | `pandas`、`numpy`、数据管道 | 文件输入、反序列化，Medium |
+
+#### 混合项目判据
+
+如果同时存在 C/C++ 和 Python 文件：
+- 检查是否为 **Python C 扩展**（`setup.py` 含 `ext_modules`、`.pyx` 文件）
+- 检查是否为 **独立组件共存**（C 服务 + Python 脚本/工具）
+- 在 `project_profile` 中标注主要语言和混合方式
 
 #### 第二步：建立信任边界
 
@@ -167,11 +188,24 @@ permission:
 #### 阶段 A：扫描候选入口点
 
 使用以下模式识别所有潜在外部输入位置：
+
+**C/C++ 入口模式**：
 - **网络入口**: socket, bind, listen, accept, recv, read on socket
 - **文件入口**: fopen, open, fread, read on file
 - **环境入口**: getenv, secure_getenv, environ
 - **命令行入口**: argc, argv, getopt
 - **用户输入**: scanf, gets, fgets from stdin
+
+**Python 入口模式**：
+- **Web 路由**: `@app.route()`（Flask）、`path()`/`re_path()`（Django URLconf）、`@app.get/post/put/delete()`（FastAPI）
+- **API 视图**: 继承 `View`/`APIView`/`ViewSet` 的类的 HTTP 方法
+- **命令行入口**: `argparse.ArgumentParser`、`@click.command()`、`typer.Typer()`
+- **网络入口**: `socket.socket()`, `socketserver`, `asyncio.start_server()`
+- **文件入口**: `open()`, `pathlib.Path().read_text()`
+- **环境入口**: `os.environ`, `os.getenv()`
+- **用户输入**: `input()`
+- **消息队列**: `@celery_app.task`、Redis/RabbitMQ 消费者
+- **WebSocket**: `@socketio.on()`, `websocket.receive()`
 
 #### 阶段 B：基于项目定位过滤
 
@@ -215,6 +249,8 @@ permission:
 
 **必须分析函数的跨文件调用关系**，详细方法参考 `@skill:cross-file-analysis`：
 
+#### C/C++ 跨文件分析
+
 1. **识别跨文件接口函数**
    - 非 static 函数（可被其他文件调用）
    - 在 .h 头文件中声明的函数
@@ -229,19 +265,52 @@ permission:
    - 全局变量跨文件共享的情况
    - 回调函数的注册和调用
 
+#### Python 跨文件分析
+
+1. **识别模块导入关系**
+   - `import module` / `from module import func` 导入链
+   - 包结构 `__init__.py` 的导出
+   - 相对导入 `from . import sibling`
+
+2. **构建函数/类调用图**
+   - 函数调用和类实例化关系
+   - 装饰器链追踪（`@decorator` 的 wrapper 关系）
+   - 类继承关系（子类重写方法）
+
+3. **识别数据传递点**
+   - 函数参数传递请求数据的位置
+   - 模块级变量（`settings.SECRET_KEY`）的跨文件共享
+   - 中间件对 request/response 的修改
+
+### 6. 模块语言标注（必须）
+
+**输出的每个 module 和 file 必须带 `language` 字段**：
+
+| 文件扩展名 | language 值 |
+|-----------|------------|
+| `.c`, `.cpp`, `.h`, `.hpp`, `.cc`, `.cxx` | `c_cpp` |
+| `.py` | `python` |
+
+模块 `language` 判定规则：
+- 模块内全部是 C/C++ 文件 → `c_cpp`
+- 模块内全部是 Python 文件 → `python`
+- 模块内两种语言都有 → `mixed`
+
 ## 通用模块分类
 
-| 类别 | 风险等级 | 常见模式 |
-|------|----------|----------|
-| 网络/通信 | Critical | socket, network, connection, server, client |
-| 协议解析 | High | request, response, parse, protocol, http, ftp |
-| 认证授权 | Critical | auth, login, session, permission, access |
-| 命令执行 | Critical | exec, system, popen, spawn, cgi, process |
-| 加密安全 | High | crypto, ssl, tls, cipher, hash, encrypt |
-| 配置解析 | Medium | config, parse, settings, ini, yaml, json |
-| 文件操作 | Medium | file, fs, path, directory, io |
-| 内存管理 | High | buffer, memory, alloc, pool, cache |
-| 日志/调试 | Low | log, debug, trace, print |
+| 类别 | 风险等级 | C/C++ 常见模式 | Python 常见模式 |
+|------|----------|---------------|----------------|
+| 网络/通信 | Critical | socket, network, connection, server | wsgi, asgi, server, api |
+| 请求处理 | High | request, response, parse, protocol | views, routes, endpoints, handlers |
+| 认证授权 | Critical | auth, login, session, permission | auth, middleware, permissions, decorators |
+| 命令/代码执行 | Critical | exec, system, popen, spawn, cgi | subprocess, eval, tasks, celery |
+| 加密安全 | High | crypto, ssl, tls, cipher, hash | crypto, jwt, tokens, signing |
+| 数据库操作 | High | sqlite3, mysql, pq | models, queries, orm, migrations |
+| 配置/反序列化 | Medium | config, parse, settings | settings, serializers, config |
+| 文件操作 | Medium | file, fs, path, directory, io | upload, storage, files, media |
+| 内存管理 | High | buffer, memory, alloc, pool | — |
+| 模板渲染 | Medium | — | templates, jinja, render |
+| 日志/调试 | Low | log, debug, trace, print | logging, debug, utils |
 
 ## 输出格式（结构化）
 
@@ -252,7 +321,7 @@ permission:
 
 ## 项目概览
 - 项目名称: [名称]
-- 主要语言: C/C++
+- 语言组成: C/C++ XX 文件 / Python XX 文件
 - 源文件数: [数量]
 - 主要功能: [简述]
 

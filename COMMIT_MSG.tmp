@@ -1,6 +1,0 @@
-feat: split report into confirmed and unconfirmed variants
-
-report-generator now produces two separate reports:
-- report_confirmed.md: only CONFIRMED vulnerabilities
-- report_unconfirmed.md: LIKELY/POSSIBLE vulnerabilities
-Update reporter agent, orchestrator, and skill docs accordingly.
