@@ -195,7 +195,17 @@ vuln-db command=init db_path={CONTEXT_DIR}/scan.db
 检查 `{PROJECT_ROOT}/threat.md` 是否存在：
 
 - **存在** → 在进度报告中标注"约束模式"，调用 @architecture 时传递该状态
-- **不存在** → 在进度报告中标注"自主分析模式"，@architecture 将自主识别所有攻击面
+- **不存在** → 使用 `question` 工具询问用户：
+
+```
+prompt: "未检测到 threat.md 约束文件。请选择如何确定扫描范围："
+options:
+  - "直接继续，AI 自主识别所有攻击面（自主分析模式）"
+  - "暂停扫描，我先调用 @threat-analyst 交互式生成 threat.md（推荐，可精确控制扫描范围）"
+```
+
+  - 用户选择"直接继续" → 在进度报告中标注"自主分析模式"，@architecture 将自主识别所有攻击面
+  - 用户选择"暂停扫描" → 停止当前流程，提示用户调用 `@threat-analyst` 生成 threat.md 后再重新调用 `@orchestrator`
 
 **步骤 6：确定执行起点**
 

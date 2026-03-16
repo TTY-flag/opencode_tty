@@ -70,6 +70,12 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 | `scan_log.json` | @orchestrator | 用户/调试 | Agent 调用日志和扫描统计 |
 | `scoring_rules.json` | 用户（可选） | @verification、@verification-worker | 自定义置信度评分规则 |
 
+### 约束文件
+
+| 文件 | 写入者 | 读取者 | 用途 |
+|------|--------|--------|------|
+| `threat.md` | @threat-analyst（交互式生成） | @orchestrator、@architecture | 攻击面约束，定义扫描范围 |
+
 ### 输出文件
 
 | 文件 | 写入者 | 用途 |
@@ -256,6 +262,57 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
   }
 }
 ```
+
+## threat.md 格式规范
+
+由 `@threat-analyst` 交互式生成，存放于 `{PROJECT_ROOT}/threat.md`。`@orchestrator` 检测其是否存在，`@architecture` 读取并解析。
+
+### 文件结构
+
+```markdown
+# 威胁分析约束文件
+
+> 由 @threat-analyst 交互式生成
+> 生成时间: [ISO8601]
+> 项目路径: {PROJECT_ROOT}
+> 项目类型: [推断的项目类型]
+
+## 关注的攻击入口
+
+| 文件 | 行号 | 函数 | 入口类型 | 信任等级 | 说明 |
+|------|------|------|----------|----------|------|
+| src/server.c | 123 | handle_request | network | untrusted_network | TCP 公网接口 |
+| app/views.py | 30 | search | web_route | untrusted_network | Flask 搜索路由 |
+
+## 关注的威胁场景
+
+- Spoofing: 身份伪造风险
+- Tampering: 网络数据篡改
+- Elevation of Privilege: 权限提升
+
+## 排除的入口
+
+| 文件 | 函数 | 排除原因 |
+|------|------|----------|
+| src/config.c | load_config | 管理员控制的配置文件 |
+| scripts/setup.py | main | 安装脚本，非运行时入口 |
+```
+
+### 字段说明
+
+| 章节 | 必须 | 说明 |
+|------|------|------|
+| 关注的攻击入口 | 是 | `@architecture` 将这些入口作为 `entry_points` 的基础集合 |
+| 关注的威胁场景 | 是 | `@architecture` 仅对这些场景进行 STRIDE 建模 |
+| 排除的入口 | 是 | `@architecture` 不得将这些入口写入 `entry_points` 和 `attack_surfaces` |
+
+### 入口类型枚举
+
+与 `entry_points[].type` 一致：`network`, `file`, `env`, `cmdline`, `stdin`, `web_route`, `rpc`, `decorator`
+
+### 信任等级枚举
+
+与 `entry_points[].trust_level` 一致：`untrusted_network`, `untrusted_local`, `semi_trusted`, `trusted_admin`
 
 ## 文件路径格式
 
