@@ -1,8 +1,8 @@
-# Multi-Agent C/C++ Vulnerability Scanner
+# Multi-Agent C/C++/Python Vulnerability Scanner
 
-基于 [OpenCode](https://github.com/anomalyco/opencode) 的通用多 Agent C/C++ 源码漏洞扫描系统。
+基于 [OpenCode](https://github.com/anomalyco/opencode) 的通用多 Agent C/C++/Python 源码漏洞扫描系统。
 
-**通用性设计**: 本系统适用于任何 C/C++ 项目，不限于特定项目。
+**通用性设计**: 本系统适用于任何 C/C++ 或 Python 项目，不限于特定项目。支持主流 Python Web 框架（Flask、Django、FastAPI）和标准库。
 
 ## 架构概览
 
@@ -11,12 +11,14 @@
 │                    Orchestrator (协调者)                      │
 │                    mode: primary                             │
 │              输出: scan_log.json (扫描日志)                   │
+│              输出: scan.db (初始化数据库)                     │
 └─────────────────────────┬───────────────────────────────────┘
                           │
                           ▼
               ┌───────────────────────┐
               │  ArchitectureAnalysis │  ← 阶段1: 架构侦察
               │  • 项目架构分析        │
+              │  • 语言组成检测        │
               │  • 攻击面识别          │
               │  • 威胁建模 (STRIDE)   │
               │  • 跨文件调用分析      │
@@ -27,36 +29,40 @@
               │  • call_graph.json    │
               │  • threat_analysis_   │
               │    report.md          │
-              └───────────┬───────────┘
-                          │
+              └───┬───────────────────┘
+                  │
           ✅ 必须等待 ArchitectureAnalysis 完成
           （project_model.json + call_graph.json 写入成功）
-                          │
-        ┌─────────────────┴─────────────────┐
-        ▼                                   ▼
-┌───────────────────┐               ┌───────────────────┐
-│ DataFlowScanner   │  ← 阶段2:     │ SecurityAuditor   │
-│   (协调者)        │    并行扫描   │   (协调者)         │
-│                   │               │                   │
-│ ┌───────────────┐ │               │ ┌───────────────┐ │
-│ │ Module Scanner│ │               │ │ Module Scanner│ │
-│ │  (模块1)      │ │               │ │  (模块1)      │ │
-│ ├───────────────┤ │               │ ├───────────────┤ │
-│ │ Module Scanner│ │               │ │ Module Scanner│ │
-│ │  (模块2)      │ │               │ │  (模块2)      │ │
-│ ├───────────────┤ │               │ ├───────────────┤ │
-│ │ Module Scanner│ │               │ │ Module Scanner│ │
-│ │  (模块N)      │ │               │ │  (模块N)      │ │
-│ └───────────────┘ │               │ └───────────────┘ │
-│ + 跨模块数据流分析│               │ + 跨模块安全分析  │
-│ + vuln-db insert  │               │ + vuln-db insert  │
-│                   │               │                   │
-│ 输出: scan.db     │               │ 输出: scan.db     │
-│  (候选漏洞入库)   │               │  (候选漏洞入库)   │
-└─────────┬─────────┘               └─────────┬─────────┘
-          │                                   │
-          └─────────────────┬─────────────────┘
-                            ▼
+                  │
+    ┌─────────────┴─────────────┐
+    │                           │
+    ▼                           ▼
+┌───────────────────┐   ┌───────────────────┐
+│ DataFlowScanner   │   │ SecurityAuditor   │  ← 阶段2: 并行扫描
+│   (协调者)        │   │   (协调者)        │
+│                   │   │                   │
+│ ┌───────────────┐ │   │ ┌───────────────┐ │
+│ │ Module Scanner│ │   │ │ Module Scanner│ │  ← C/C++ 模块扫描
+│ │  (C/C++ 模块1)│ │   │ │  (C/C++ 模块1)│ │
+│ ├───────────────┤ │   │ ├───────────────┤ │
+│ │ Module Scanner│ │   │ │ Module Scanner│ │
+│ │  (C/C++ 模块2)│ │   │ │  (C/C++ 模块2)│ │
+│ ├───────────────┤ │   │ ├───────────────┤ │
+│ │ Python Module │ │   │ │ Python Module │ │  ← Python 模块扫描
+│ │  Scanner(模块1)│ │   │ │  Scanner(模块1)│ │
+│ ├───────────────┤ │   │ ├───────────────┤ │
+│ │ Python Module │ │   │ │ Python Module │ │
+│ │  Scanner(模块2)│ │   │ │  Scanner(模块2)│ │
+│ └───────────────┘ │   │ └───────────────┘ │
+│ + 跨模块数据流分析│   │ + 跨模块安全分析  │
+│ + vuln-db insert  │   │ + vuln-db insert  │
+│                   │   │                   │
+│ 输出: scan.db     │   │ 输出: scan.db     │
+│  (候选漏洞入库)   │   │  (候选漏洞入库)   │
+└─────────┬─────────┘   └─────────┬─────────┘
+          │                       │
+          └───────────────┬───────┘
+                          ▼
               ┌───────────────────────┐
               │  Verification (协调者) │  ← 阶段3: 漏洞验证
               │   • vuln-db dedup     │
@@ -94,27 +100,44 @@
               │    _report.md 由     │
               │    architecture 生成)│
               └───────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│                 ThreatAnalyst (交互式威胁分析)               │  ← 可选前置阶段
+│                    mode: primary                             │
+│              • 自动发现候选攻击入口                           │
+│              • 与用户交互确认入口范围                         │
+│              • 生成 threat.md 约束文件                        │
+│                       │                                      │
+│              输出: {PROJECT_ROOT}/threat.md                   │
+│              → 被 Architecture 读取进入约束模式               │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ## Agent 输入输出详解
 
 ### 各 Agent 输入输出一览
 
-| Agent | 输入 | 输出 | 说明 |
-|-------|------|------|------|
-| **orchestrator** | 用户指令 | `scan_log.json`、`scan.db`（初始化） | 协调全流程，初始化数据库，记录扫描日志 |
-| **architecture** | 源代码 | `project_model.json`<br>`call_graph.json`<br>`threat_analysis_report.md` | 架构分析、威胁建模 |
-| **dataflow-scanner** | `project_model.json`<br>`call_graph.json` | `scan.db`（候选漏洞） | 协调模块扫描 + 跨模块分析，写入数据库 |
-| **dataflow-module-scanner** | 模块文件列表<br>调用图子集 | `scan.db`（vuln-db insert） | 单模块污点分析（子Agent） |
-| **security-auditor** | `project_model.json`<br>`call_graph.json` | `scan.db`（候选漏洞） | 协调模块审计 + 跨模块安全分析，写入数据库 |
-| **security-module-scanner** | 模块文件列表<br>调用图子集 | `scan.db`（vuln-db insert） | 单模块安全审计（子Agent） |
-| **verification** | `scan.db`（候选漏洞） | `scan.db`（验证结果） | 协调漏洞验证：去重 + 分批调度 + 跨模块验证 |
-| **verification-worker** | `scan.db`（批次漏洞ID）<br>调用图子集 | `scan.db`（vuln-db batch-update） | 单批次深度验证 + 置信度评分 + 严重性重评估（子Agent） |
-| **reporter** | `scan.db`<br>`project_model.json` | `report.md` | report-generator 生成全量骨架 + LLM 补充分析 |
+| Agent                              | 输入                                      | 输出                                                                     | 说明                                                         |
+| ---------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------ |
+| **orchestrator**                   | 用户指令                                  | `scan_log.json`、`scan.db`（初始化）                                     | 协调全流程，初始化数据库，记录扫描日志                       |
+| **threat-analyst**                 | 源代码（用户指定项目路径）                | `{PROJECT_ROOT}/threat.md`                                               | 交互式发现攻击入口，与用户确认后生成约束文件（可选前置阶段） |
+| **architecture**                   | 源代码 + `threat.md`（可选）              | `project_model.json`<br>`call_graph.json`<br>`threat_analysis_report.md` | 架构分析、语言检测、威胁建模                                 |
+| **dataflow-scanner**               | `project_model.json`<br>`call_graph.json` | `scan.db`（候选漏洞）                                                    | 协调模块扫描 + 跨模块分析，写入数据库                        |
+| **dataflow-module-scanner**        | 模块文件列表<br>调用图子集                | `scan.db`（vuln-db insert）                                              | 单模块 C/C++ 污点分析（子Agent）                             |
+| **python-dataflow-module-scanner** | 模块文件列表<br>调用图子集                | `scan.db`（vuln-db insert）                                              | 单模块 Python 污点分析（子Agent）                            |
+| **security-auditor**               | `project_model.json`<br>`call_graph.json` | `scan.db`（候选漏洞）                                                    | 协调模块审计 + 跨模块安全分析，写入数据库                    |
+| **security-module-scanner**        | 模块文件列表<br>调用图子集                | `scan.db`（vuln-db insert）                                              | 单模块 C/C++ 安全审计（子Agent）                             |
+| **python-security-module-scanner** | 模块文件列表<br>调用图子集                | `scan.db`（vuln-db insert）                                              | 单模块 Python 安全审计（子Agent）                            |
+| **verification**                   | `scan.db`（候选漏洞）                     | `scan.db`（验证结果）                                                    | 协调漏洞验证：去重 + 分批调度 + 跨模块验证                   |
+| **verification-worker**            | `scan.db`（批次漏洞ID）<br>调用图子集     | `scan.db`（vuln-db batch-update）                                        | 单批次深度验证 + 置信度评分 + 严重性重评估（子Agent）        |
+| **reporter**                       | `scan.db`<br>`project_model.json`         | `report.md`                                                              | report-generator 生成全量骨架 + LLM 补充分析                 |
 
 ## 核心特性
 
+- **多语言支持**: 支持 C/C++ 和 Python 两种语言，Python 覆盖 Flask、Django、FastAPI 等主流 Web 框架
+- **语言自动检测**: Architecture Agent 自动检测项目语言组成，按语言类型调度对应的 Scanner Worker
 - **项目定位分析**: Architecture Agent 先确定项目类型和信任边界，再基于可达性过滤攻击入口，避免不合理的入口识别
+- **交互式威胁分析**: ThreatAnalyst Agent 自动发现候选攻击入口，与用户交互确认后生成 `threat.md` 约束文件
 - **跨文件分析**: 追踪跨越多个文件的数据流和调用链（至少 3 层深度）
 - **信任等级贯通**: 项目定位分析产出的 `trust_level` 传递到 Scanner 优先级排序和 Verification 可达性评分，避免信息断流
 - **三层误报过滤**: Scanner 预验证 → Verification 深度验证（含一票否决 + 去重） → Reporter 按 verified_severity 分组
@@ -128,7 +151,7 @@
 - **评分规则可配置**: 置信度评分规则可通过 `scoring_rules.json` 自定义
 - **SQLite 数据库存储**: 漏洞数据存储在 SQLite 数据库（`scan.db`）中，替代分散的 JSON 中间文件，确保数据一致性和查询效率
 - **程序化报告生成**: 使用 `report-generator` 工具从数据库程序化生成 100% 完整的报告，解决 LLM 输出截断问题
-- **模块化 Skill**: 知识型能力（污点规则、评分方法等）提取为独立 Skill，便于维护和扩展
+- **模块化 Skill**: 知识型能力（污点规则、评分方法等）提取为独立 Skill，便于维护和扩展，支持多语言独立规则文件
 
 ## 快速开始
 
@@ -174,17 +197,20 @@ opencode
 
 ## Agent 说明
 
-| Agent            | Mode     | 职责                               | 调用方式                 |
-| ---------------- | -------- | ---------------------------------- | ------------------------ |
-| orchestrator     | primary  | 协调整个扫描流程，记录扫描日志     | Tab 切换或 @orchestrator |
-| architecture     | subagent | 架构分析、威胁建模、LSP检测、调用图 | @architecture            |
-| dataflow-scanner | subagent | **协调者**：按模块调度子Agent + 跨模块分析 + vuln-db insert | @dataflow-scanner        |
-| dataflow-module-scanner | subagent | 单模块污点分析 + vuln-db insert | 由 dataflow-scanner 调用 |
-| security-auditor | subagent | **协调者**：按模块调度子Agent + 跨模块安全分析 + vuln-db insert | @security-auditor        |
-| security-module-scanner | subagent | 单模块安全审计 + vuln-db insert | 由 security-auditor 调用 |
-| verification     | subagent | **协调者**：vuln-db dedup + 分批调度验证 + 跨模块验证 | @verification            |
-| verification-worker | subagent | 单批次深度验证 + 置信度评分 + vuln-db batch-update | 由 verification 调用 |
-| reporter         | subagent | report-generator 生成骨架 + LLM 补充分析 | @reporter                |
+| Agent                          | Mode     | 职责                                                            | 调用方式                 |
+| ------------------------------ | -------- | --------------------------------------------------------------- | ------------------------ |
+| orchestrator                   | primary  | 协调整个扫描流程，记录扫描日志                                  | Tab 切换或 @orchestrator |
+| threat-analyst                 | primary  | 交互式发现攻击入口，与用户确认后生成 `threat.md` 约束文件       | @threat-analyst          |
+| architecture                   | subagent | 架构分析、语言检测、威胁建模、LSP检测、调用图                   | @architecture            |
+| dataflow-scanner               | subagent | **协调者**：按模块调度子Agent + 跨模块分析 + vuln-db insert     | @dataflow-scanner        |
+| dataflow-module-scanner        | subagent | 单模块 C/C++ 污点分析 + vuln-db insert                          | 由 dataflow-scanner 调用 |
+| python-dataflow-module-scanner | subagent | 单模块 Python 污点分析 + vuln-db insert                         | 由 dataflow-scanner 调用 |
+| security-auditor               | subagent | **协调者**：按模块调度子Agent + 跨模块安全分析 + vuln-db insert | @security-auditor        |
+| security-module-scanner        | subagent | 单模块 C/C++ 安全审计 + vuln-db insert                          | 由 security-auditor 调用 |
+| python-security-module-scanner | subagent | 单模块 Python 安全审计 + vuln-db insert                         | 由 security-auditor 调用 |
+| verification                   | subagent | **协调者**：vuln-db dedup + 分批调度验证 + 跨模块验证           | @verification            |
+| verification-worker            | subagent | 单批次深度验证 + 置信度评分 + vuln-db batch-update              | 由 verification 调用     |
+| reporter                       | subagent | report-generator 生成骨架 + LLM 补充分析                        | @reporter                |
 
 ### 层级架构
 
@@ -194,12 +220,13 @@ DataFlow Scanner、Security Auditor 和 Verification 都采用协调者-工作�
 @dataflow-scanner (协调者)                @security-auditor (协调者)
     │                                         │
     ├── 读取 project_model.json               ├── 读取 project_model.json
+    │   （检测语言组成）                       │   （检测语言组成）
     │                                         │
-    ├── @dataflow-module-scanner (模块1)      ├── @security-module-scanner (模块1)
-    │       └── 模块内污点分析                │       └── 模块内安全审计
+    ├── @dataflow-module-scanner (C/C++ 模块)  ├── @security-module-scanner (C/C++ 模块)
+    │       └── 模块内 C/C++ 污点分析         │       └── 模块内 C/C++ 安全审计
     │                                         │
-    ├── @dataflow-module-scanner (模块2)      ├── @security-module-scanner (模块2)
-    │       └── ...                           │       └── ...
+    ├── @python-dataflow-module-scanner        ├── @python-security-module-scanner
+    │       └── 模块内 Python 污点分析        │       └── 模块内 Python 安全审计
     │                                         │
     ├── 收集所有模块的扫描统计                ├── 收集所有模块的审计统计
     │                                         │
@@ -228,6 +255,7 @@ DataFlow Scanner、Security Auditor 和 Verification 都采用协调者-工作�
 ```
 
 **优势**：
+
 - 每个子 Agent 只处理一个模块/批次，避免上下文爆炸
 - 模块内聚性好，分析更完整
 - 协调者负责跨模块分析，捕获模块边界漏洞
@@ -239,30 +267,38 @@ DataFlow Scanner、Security Auditor 和 Verification 都采用协调者-工作�
 
 知识型能力提取为独立 Skill，便于单模块优化和多语言扩展：
 
-| Skill | 路径 | 用途 | 引用者 |
-|-------|------|------|--------|
-| c-cpp-taint-tracking | `.opencode/skill/c-cpp-taint-tracking/` | 污点源/汇定义 | dataflow-module-scanner |
-| pre-validation-rules | `.opencode/skill/pre-validation-rules/` | 误报过滤规则 | 所有 Scanner |
-| confidence-scoring | `.opencode/skill/confidence-scoring/` | 置信度评分方法（含一票否决） | verification-worker |
-| cross-file-analysis | `.opencode/skill/cross-file-analysis/` | 跨文件追踪方法 | architecture, 所有 Scanner, verification, verification-worker |
-| agent-communication | `.opencode/skill/agent-communication/` | 路径约定、JSON Schema | 所有 Agent |
-| vulnerability-db | `.opencode/skill/vulnerability-db/` | SQLite 数据库 Schema、vuln-db 工具 API | 所有 Scanner, verification, reporter |
+| Skill                 | 路径                                     | 用途                                              | 引用者                                                        |
+| --------------------- | ---------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------- |
+| c-cpp-taint-tracking  | `.opencode/skill/c-cpp-taint-tracking/`  | C/C++ 污点源/汇定义                               | dataflow-module-scanner                                       |
+| python-taint-tracking | `.opencode/skill/python-taint-tracking/` | Python 污点源/汇定义（覆盖 Flask/Django/FastAPI） | python-dataflow-module-scanner                                |
+| pre-validation-rules  | `.opencode/skill/pre-validation-rules/`  | 误报过滤规则（支持 C/C++ 和 Python）              | 所有 Scanner                                                  |
+| confidence-scoring    | `.opencode/skill/confidence-scoring/`    | 置信度评分方法（含一票否决）                      | verification-worker                                           |
+| cross-file-analysis   | `.opencode/skill/cross-file-analysis/`   | 跨文件追踪方法（支持 C/C++ 和 Python）            | architecture, 所有 Scanner, verification, verification-worker |
+| agent-communication   | `.opencode/skill/agent-communication/`   | 路径约定、JSON Schema                             | 所有 Agent                                                    |
+| vulnerability-db      | `.opencode/skill/vulnerability-db/`      | SQLite 数据库 Schema、vuln-db 工具 API            | 所有 Scanner, verification, reporter                          |
+| bun-file-io           | `.opencode/skill/bun-file-io/`           | Bun 文件 I/O 最佳实践                             | 所有需要文件操作的 Agent                                      |
 
 ### 扩展新语言
 
 要支持新语言（如 Java），只需：
+
 1. 创建 `.opencode/skill/java-taint-tracking/SKILL.md`（定义 Java 的 Source/Sink）
 2. 在 `pre-validation-rules` 中添加语言特有过滤条件
-3. 修改 Scanner Agent 引用新的 Skill
+3. 创建对应的模块扫描 Agent（如 `java-dataflow-module-scanner.md`）
+4. 修改 Scanner 协调者根据语言类型调度对应的 Worker
 
 ## 自定义 Tool 说明
 
-| Tool | 路径 | 用途 |
-|------|------|------|
-| vuln-db | `.opencode/tool/vuln-db.ts` | SQLite 漏洞数据库 CRUD 操作（init/insert/query/update/dedup/stats/log） |
-| report-generator | `.opencode/tool/report-generator.ts` | 从 SQLite 程序化生成完整 Markdown 漏洞报告 |
-| merge-json | `.opencode/tool/merge-json.ts` | 合并多个 JSON 文件的数组字段（已弃用，漏洞数据改用 vuln-db） |
-| validate-json | `.opencode/tool/validate-json.ts` | JSON 文件语法校验（仍用于 project_model.json、call_graph.json、scan_log.json） |
+| Tool             | 路径                                 | 用途                                                                         | 状态                              |
+| ---------------- | ------------------------------------ | ---------------------------------------------------------------------------- | --------------------------------- |
+| vuln-db          | `.opencode/tool/vuln-db.ts`          | SQLite 漏洞数据库 CRUD 操作（init/insert/query/update/dedup/stats/log）      | ✅ 使用中                         |
+| report-generator | `.opencode/tool/report-generator.ts` | 从 SQLite 程序化生成完整 Markdown 漏洞报告                                   | ✅ 使用中                         |
+| merge-json       | `.opencode/tool/merge-json.ts`       | 合并多个 JSON 文件的数组字段                                                 | ⚠️ 已弃用（漏洞数据改用 vuln-db） |
+| validate-json    | `.opencode/tool/validate-json.ts`    | JSON 文件语法校验（用于 project_model.json、call_graph.json、scan_log.json） | ✅ 使用中                         |
+| github-triage    | `.opencode/tool/github-triage.ts`    | GitHub Issue 自动分配和标签管理                                              | ❌ 禁用（项目开发辅助）           |
+| github-pr-search | `.opencode/tool/github-pr-search.ts` | GitHub PR 搜索                                                               | ❌ 禁用（项目开发辅助）           |
+
+> **注**: `github-triage` 和 `github-pr-search` 是本项目开发辅助工具，与漏洞扫描无关，在 `opencode.jsonc` 中已禁用。
 
 ### vuln-db
 
@@ -287,9 +323,23 @@ SQLite 漏洞数据库工具，替代之前分散的 JSON 中间文件。通过 
 
 所有统计数据由 SQL 精确计算，确保报告内各表格数据一致。
 
+## 自定义 Command 说明
+
+本项目还包含若干开发辅助命令（与漏洞扫描无关）：
+
+| Command     | 路径                              | 用途                            |
+| ----------- | --------------------------------- | ------------------------------- |
+| /commit     | `.opencode/command/commit.md`     | Git commit + push（带规范前缀） |
+| /issues     | `.opencode/command/issues.md`     | GitHub issues 查找              |
+| /rmslop     | `.opencode/command/rmslop.md`     | 移除 AI 生成的代码风格问题      |
+| /spellcheck | `.opencode/command/spellcheck.md` | Markdown 文件拼写检查           |
+| /ai-deps    | `.opencode/command/ai-deps.md`    | AI SDK 依赖版本升级             |
+
+> **注**: 这些命令用于本 harness 工程的开发维护，扫描其他项目时不需关注。
+
 ## 检测能力
 
-### 数据流漏洞 (DataFlowScanner)
+### C/C++ 数据流漏洞 (DataFlowScanner)
 
 - 缓冲区溢出 (CWE-120, CWE-121, CWE-122)
 - Use-After-Free (CWE-416)
@@ -299,7 +349,19 @@ SQLite 漏洞数据库工具，替代之前分散的 JSON 中间文件。通过 
 - 命令注入 (CWE-78)
 - 格式化字符串 (CWE-134)
 
-### 安全审计 (SecurityAuditor)
+### Python 数据流漏洞 (PythonDataFlowScanner)
+
+- **SQL 注入** (CWE-89): f-string、format、% 格式化拼接 SQL
+- **命令注入** (CWE-78): `os.system()`、`subprocess.*` 带 `shell=True`
+- **代码注入** (CWE-94): `eval()`、`exec()`、`compile()` 接收外部输入
+- **反序列化 RCE** (CWE-502): `pickle.loads()`、`yaml.load()` 无 SafeLoader
+- **SSRF** (CWE-918): `requests`、`urllib` 使用用户控制 URL
+- **路径遍历** (CWE-22): `open()` 使用用户控制文件路径
+- **模板注入 (SSTI)** (CWE-1336): Jinja2/Django 用户控制模板字符串
+- **XXE** (CWE-611): XML 解析器处理外部实体
+- **LDAP 注入** (CWE-90): LDAP 过滤器拼接用户输入
+
+### C/C++ 安全审计 (SecurityAuditor)
 
 - 硬编码凭证 (CWE-798)
 - 弱密码学 (CWE-327, CWE-328)
@@ -308,6 +370,17 @@ SQLite 漏洞数据库工具，替代之前分散的 JSON 中间文件。通过 
 - TLS 配置问题
 - 权限提升风险
 - 认证绕过
+
+### Python 安全审计 (PythonSecurityAuditor)
+
+- **硬编码凭证** (CWE-798): `SECRET_KEY`、密码、API Key、JWT 密钥
+- **DEBUG 模式暴露** (CWE-489): 生产环境 `DEBUG=True`
+- **assert 安全检查失效** (CWE-617): 使用 `assert` 进行安全校验
+- **IDOR** (CWE-639): 直接使用用户 ID 访问资源无权限校验
+- **Mass Assignment**: `Model(**request.data)` 允许修改不应修改的字段
+- **JWT 配置问题** (CWE-347): `algorithm="none"`、未验证签名
+- **Session 安全**: 不安全的 session 配置（`SESSION_COOKIE_SECURE=False`）
+- **不安全临时文件** (CWE-377): `tempfile.mktemp()` 存在竞态条件
 
 ## 跨文件分析
 
@@ -394,26 +467,37 @@ Verification Worker → 发现调用链不完整
 ```
 your-project/
 ├── threat.md（可选）            # 分析人员定义的攻击面约束，约束 AI 识别范围
+│                                # 可手动编写或由 @threat-analyst 交互式生成
 ├── .opencode/
-│   ├── agent/                      # Agent 定义（10 个）
-│   │   ├── orchestrator.md         # 扫描协调者
-│   │   ├── architecture.md         # 架构分析
+│   ├── agent/                      # Agent 定义（12 个）
+│   │   ├── orchestrator.md         # 扫描协调者（primary）
+│   │   ├── threat-analyst.md       # 交互式威胁分析（primary）
+│   │   ├── architecture.md         # 架构分析、语言检测
 │   │   ├── dataflow-scanner.md     # 数据流扫描协调者
-│   │   ├── dataflow-module-scanner.md  # 模块级扫描子Agent
+│   │   ├── dataflow-module-scanner.md  # C/C++ 模块级扫描子Agent
+│   │   ├── python-dataflow-module-scanner.md  # Python 模块级扫描子Agent
 │   │   ├── security-auditor.md     # 安全审计协调者
-│   │   ├── security-module-scanner.md  # 模块级审计子Agent
+│   │   ├── security-module-scanner.md  # C/C++ 模块级审计子Agent
+│   │   ├── python-security-module-scanner.md  # Python 模块级审计子Agent
 │   │   ├── verification.md         # 漏洞验证协调者
 │   │   ├── verification-worker.md  # 模块级验证子Agent
 │   │   └── reporter.md             # 报告生成
-│   ├── skill/                      # Skill 定义（7 个）
+│   ├── skill/                      # Skill 定义（8 个）
 │   │   ├── agent-communication/    # Agent 间通信规范
 │   │   ├── c-cpp-taint-tracking/   # C/C++ 污点追踪规则
+│   │   ├── python-taint-tracking/  # Python 污点追踪规则（Flask/Django/FastAPI）
 │   │   ├── confidence-scoring/     # 置信度评分方法
-│   │   ├── cross-file-analysis/    # 跨文件分析方法
-│   │   ├── pre-validation-rules/   # 预验证/误报过滤
+│   │   ├── cross-file-analysis/    # 跨文件分析方法（C/C++/Python）
+│   │   ├── pre-validation-rules/   # 预验证/误报过滤（C/C++/Python）
 │   │   ├── vulnerability-db/       # SQLite 漏洞数据库 Schema 和 API
-│   │   └── bun-file-io/            # Bun 文件 I/O（内置）
-│   └── tool/                       # 自定义工具
+│   │   └── bun-file-io/            # Bun 文件 I/O 最佳实践
+│   ├── command/                    # 项目开发命令（5 个）
+│   │   ├── commit.md               # Git commit + push
+│   │   ├── issues.md               # GitHub issues 查找
+│   │   ├── rmslop.md               # 移除 AI 代码风格问题
+│   │   ├── spellcheck.md           # Markdown 拼写检查
+│   │   └── ai-deps.md              # AI SDK 依赖升级
+│   └── tool/                       # 自定义工具（6 个）
 │       ├── vuln-db.ts              # SQLite 漏洞数据库 CRUD 工具
 │       ├── vuln-db.txt             # vuln-db 工具描述
 │       ├── report-generator.ts     # 程序化报告生成工具
@@ -421,7 +505,11 @@ your-project/
 │       ├── merge-json.ts           # JSON 文件合并工具（已弃用）
 │       ├── merge-json.txt          # 工具描述
 │       ├── validate-json.ts        # JSON 校验工具
-│       └── validate-json.txt       # 工具描述
+│       ├── validate-json.txt       # 工具描述
+│       ├── github-triage.ts        # GitHub Issue 分配（禁用）
+│       ├── github-triage.txt       # 工具描述
+│       ├── github-pr-search.ts     # GitHub PR 搜索（禁用）
+│       └── github-pr-search.txt    # 工具描述
 └── scan-results/                   # 扫描输出（自动创建）
     ├── .context/                   # 结构化上下文（Agent 间通信）
     │   ├── scan.db                 # SQLite 漏洞数据库（候选 + 验证结果）
@@ -437,14 +525,42 @@ your-project/
 
 扫描过程中使用以下路径变量（详见 `@skill:agent-communication`）：
 
-| 变量 | 说明 | 确定方式 |
-|------|------|--------|
+| 变量           | 说明               | 确定方式                         |
+| -------------- | ------------------ | -------------------------------- |
 | `PROJECT_ROOT` | 被扫描项目的根目录 | **必须由用户在提示词中明确指定** |
-| `SCAN_OUTPUT` | 扫描输出目录 | `{PROJECT_ROOT}/scan-results` |
-| `CONTEXT_DIR` | 上下文存储目录 | `{SCAN_OUTPUT}/.context` |
-| `DB_PATH` | 漏洞数据库路径 | `{CONTEXT_DIR}/scan.db` |
+| `SCAN_OUTPUT`  | 扫描输出目录       | `{PROJECT_ROOT}/scan-results`    |
+| `CONTEXT_DIR`  | 上下文存储目录     | `{SCAN_OUTPUT}/.context`         |
+| `DB_PATH`      | 漏洞数据库路径     | `{CONTEXT_DIR}/scan.db`          |
 
 ## threat.md 使用指南
+
+### 两种生成方式
+
+`threat.md` 文件可以通过以下两种方式生成：
+
+#### 方式一：交互式生成（推荐）
+
+调用 `@threat-analyst` Agent，它会：
+
+1. 自动扫描项目结构，识别所有候选攻击入口（网络接口、Web 路由、命令行参数、文件入口等）
+2. 按类别分组呈现给用户，标注每个入口的信任等级和风险说明
+3. 使用 `question` 工具与用户交互，让用户选择纳入/排除的入口
+4. 根据用户选择推荐关注的 STRIDE 威胁场景
+5. 自动生成格式标准的 `threat.md` 文件
+
+**使用示例**：
+
+```
+@threat-analyst 请分析 D:\my-project 的攻击面，生成 threat.md
+```
+
+#### 方式二：手动编写
+
+分析人员根据已有威胁模型或项目理解，直接编写 `threat.md` 文件。适合：
+
+- 已有完善的威胁模型文档，可直接抄录
+- 项目规模较小，攻击入口清晰可控
+- 需要精确控制扫描范围，不想依赖 AI 发现
 
 ### 作用
 
@@ -481,12 +597,12 @@ your-project/
 
 ### 使用建议
 
-| 场景 | 建议 |
-|------|------|
-| 首次扫描、摸底 | 不放置 `threat.md`，让 AI 自主发现所有潜在入口 |
-| 重点审计特定模块 | 在"关注的攻击入口"中只填写目标模块的接口 |
-| 减少已知误报 | 在"排除的入口"中填写上次扫描中确认为误报的路径 |
-| 对照已有威胁模型 | 将已有威胁模型的入口点抄录到文件中，确保覆盖 |
+| 场景             | 建议                                           |
+| ---------------- | ---------------------------------------------- |
+| 首次扫描、摸底   | 不放置 `threat.md`，让 AI 自主发现所有潜在入口 |
+| 重点审计特定模块 | 在"关注的攻击入口"中只填写目标模块的接口       |
+| 减少已知误报     | 在"排除的入口"中填写上次扫描中确认为误报的路径 |
+| 对照已有威胁模型 | 将已有威胁模型的入口点抄录到文件中，确保覆盖   |
 
 ### 工作原理
 
@@ -510,15 +626,26 @@ project_model.json              project_model.json
 
 ## 适用场景
 
-本扫描系统适用于任何 C/C++ 项目，包括但不限于：
+本扫描系统适用于任何 C/C++ 或 Python 项目，包括但不限于：
 
-- Web 服务器
+### C/C++ 项目
+
+- Web 服务器（nginx、Apache 模块等）
 - 数据库系统
 - 网络库
 - 操作系统组件
 - 嵌入式系统固件
 - 命令行工具
 - 库和框架
+
+### Python 项目
+
+- Flask/Django/FastAPI Web 应用
+- REST API 服务
+- 命令行工具（argparse/click/typer）
+- 数据处理脚本
+- 后台任务处理（Celery）
+- 微服务架构组件
 
 ## 参考资料
 
