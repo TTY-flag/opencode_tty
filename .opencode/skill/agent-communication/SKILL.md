@@ -14,12 +14,12 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 
 扫描过程中使用以下路径变量：
 
-| 变量 | 说明 | 确定方式 |
-|------|------|----------|
+| 变量           | 说明               | 确定方式                                         |
+| -------------- | ------------------ | ------------------------------------------------ |
 | `PROJECT_ROOT` | 被扫描项目的根目录 | 由用户在提示词中明确指定，不得假设为当前工作目录 |
-| `SCAN_OUTPUT` | 扫描输出目录 | `{PROJECT_ROOT}/scan-results` |
-| `CONTEXT_DIR` | 上下文存储目录 | `{SCAN_OUTPUT}/.context` |
-| `DB_PATH` | 漏洞数据库路径 | `{CONTEXT_DIR}/scan.db` |
+| `SCAN_OUTPUT`  | 扫描输出目录       | `{PROJECT_ROOT}/scan-results`                    |
+| `CONTEXT_DIR`  | 上下文存储目录     | `{SCAN_OUTPUT}/.context`                         |
+| `DB_PATH`      | 漏洞数据库路径     | `{CONTEXT_DIR}/scan.db`                          |
 
 ### 路径确定流程
 
@@ -55,33 +55,34 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 
 ### 数据库（漏洞数据）
 
-| 资源 | 写入者 | 读取者 | 用途 |
-|------|--------|--------|------|
+| 资源               | 写入者                            | 读取者     | 用途                             |
+| ------------------ | --------------------------------- | ---------- | -------------------------------- |
 | `scan.db` (SQLite) | 所有 Agent（通过 `vuln-db` 工具） | 所有 Agent | 候选漏洞 + 验证结果 + Agent 日志 |
 
 漏洞数据的 Schema 和 `vuln-db` 工具的使用方式，参考 `@skill:vulnerability-db`。
 
 ### JSON 文件（项目模型和日志）
 
-| 文件 | 写入者 | 读取者 | 用途 |
-|------|--------|--------|------|
-| `project_model.json` | @architecture | 所有 Scanner、@verification、@reporter | 项目结构和高风险文件 |
-| `call_graph.json` | @architecture | 所有 Scanner、@verification | 函数调用关系图 |
-| `scan_log.json` | @orchestrator | 用户/调试 | Agent 调用日志和扫描统计 |
-| `scoring_rules.json` | 用户（可选） | @verification、@verification-worker | 自定义置信度评分规则 |
+| 文件                 | 写入者        | 读取者                                                    | 用途                     |
+| -------------------- | ------------- | --------------------------------------------------------- | ------------------------ |
+| `project_model.json` | @architecture | 所有 Scanner、@verification、@reporter、@details-analyzer | 项目结构和高风险文件     |
+| `call_graph.json`    | @architecture | 所有 Scanner、@verification、@details-analyzer            | 函数调用关系图           |
+| `scan_log.json`      | @orchestrator | 用户/调试                                                 | Agent 调用日志和扫描统计 |
+| `scoring_rules.json` | 用户（可选）  | @verification、@verification-worker                       | 自定义置信度评分规则     |
 
 ### 约束文件
 
-| 文件 | 写入者 | 读取者 | 用途 |
-|------|--------|--------|------|
+| 文件        | 写入者                        | 读取者                       | 用途                     |
+| ----------- | ----------------------------- | ---------------------------- | ------------------------ |
 | `threat.md` | @threat-analyst（交互式生成） | @orchestrator、@architecture | 攻击面约束，定义扫描范围 |
 
 ### 输出文件
 
-| 文件 | 写入者 | 用途 |
-|------|--------|------|
-| `report.md` | @reporter（通过 `report-generator` 工具 + 补充） | 最终漏洞报告 |
-| `threat_analysis_report.md` | @architecture | 威胁分析报告 |
+| 文件                        | 写入者                                           | 用途                             |
+| --------------------------- | ------------------------------------------------ | -------------------------------- |
+| `report.md`                 | @reporter（通过 `report-generator` 工具 + 补充） | 最终漏洞报告                     |
+| `threat_analysis_report.md` | @architecture                                    | 威胁分析报告                     |
+| `details/{VULN_ID}.md`      | @details-worker                                  | 单个已确认漏洞的深度利用分析报告 |
 
 ## JSON 格式规范（必须遵守）
 
@@ -169,25 +170,22 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
       "description": "接收HTTP请求"
     }
   ],
-  "attack_surfaces": [
-    "Unix Domain Socket: /opt/app/app.sock",
-    "动态库加载: dlopen()"
-  ]
+  "attack_surfaces": ["Unix Domain Socket: /opt/app/app.sock", "动态库加载: dlopen()"]
 }
 ```
 
 **字段说明**：
 
-| 字段 | 所属 | 说明 |
-|------|------|------|
-| `project_profile` | 顶层 | 项目定位信息，由 Architecture Agent 在攻击面识别前填写 |
-| `project_profile.project_type` | project_profile | 项目类型枚举：`network_service`（网络服务）、`cli_tool`（CLI 工具）、`library`（库）、`kernel_module`（内核模块）、`embedded`（嵌入式）、`gui_application`（GUI 应用）、`web_application`（Web 应用）、`cli_tool_python`（Python CLI 工具） |
-| `project_profile.deployment_model` | project_profile | 项目的典型部署方式描述 |
-| `project_profile.trust_boundaries` | project_profile | 系统信任边界列表，标注每条边界两侧的信任差异 |
-| `language` (modules) | modules[] | 模块语言类型：`c_cpp`（C/C++）、`python`（Python）、`mixed`（混合），由 Architecture Agent 分析后填写，决定后续调度哪个语言的 Scanner Worker |
-| `language` (files) | files[] | 文件语言类型：`c_cpp`（C/C++ 源文件）、`python`（Python 源文件），由文件扩展名决定 |
-| `trust_level` | entry_points[] | 入口点信任等级，决定该入口是否值得重点扫描 |
-| `justification` | entry_points[] | 入口点可达性理由，要求 AI 解释为什么此入口是真实攻击面 |
+| 字段                               | 所属            | 说明                                                                                                                                                                                                                                        |
+| ---------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `project_profile`                  | 顶层            | 项目定位信息，由 Architecture Agent 在攻击面识别前填写                                                                                                                                                                                      |
+| `project_profile.project_type`     | project_profile | 项目类型枚举：`network_service`（网络服务）、`cli_tool`（CLI 工具）、`library`（库）、`kernel_module`（内核模块）、`embedded`（嵌入式）、`gui_application`（GUI 应用）、`web_application`（Web 应用）、`cli_tool_python`（Python CLI 工具） |
+| `project_profile.deployment_model` | project_profile | 项目的典型部署方式描述                                                                                                                                                                                                                      |
+| `project_profile.trust_boundaries` | project_profile | 系统信任边界列表，标注每条边界两侧的信任差异                                                                                                                                                                                                |
+| `language` (modules)               | modules[]       | 模块语言类型：`c_cpp`（C/C++）、`python`（Python）、`mixed`（混合），由 Architecture Agent 分析后填写，决定后续调度哪个语言的 Scanner Worker                                                                                                |
+| `language` (files)                 | files[]         | 文件语言类型：`c_cpp`（C/C++ 源文件）、`python`（Python 源文件），由文件扩展名决定                                                                                                                                                          |
+| `trust_level`                      | entry_points[]  | 入口点信任等级，决定该入口是否值得重点扫描                                                                                                                                                                                                  |
+| `justification`                    | entry_points[]  | 入口点可达性理由，要求 AI 解释为什么此入口是真实攻击面                                                                                                                                                                                      |
 
 ### call_graph.json
 
@@ -221,14 +219,14 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 
 **各 Agent 的数据库交互模式概要**：
 
-| Agent | 操作 | 说明 |
-|-------|------|------|
-| Orchestrator | `vuln-db init` | 创建数据库 |
-| Scanner Worker | `vuln-db insert` | 写入候选漏洞 |
-| Scanner Coordinator | `vuln-db stats` | 验证扫描完整性 |
-| Verification Coordinator | `vuln-db dedup` + `vuln-db query` | 去重 + 获取候选列表 |
-| Verification Worker | `vuln-db query` + `vuln-db batch-update` | 获取批次 + 写回验证结果 |
-| Reporter | `report-generator` 工具 | 程序化生成完整报告 |
+| Agent                    | 操作                                     | 说明                    |
+| ------------------------ | ---------------------------------------- | ----------------------- |
+| Orchestrator             | `vuln-db init`                           | 创建数据库              |
+| Scanner Worker           | `vuln-db insert`                         | 写入候选漏洞            |
+| Scanner Coordinator      | `vuln-db stats`                          | 验证扫描完整性          |
+| Verification Coordinator | `vuln-db dedup` + `vuln-db query`        | 去重 + 获取候选列表     |
+| Verification Worker      | `vuln-db query` + `vuln-db batch-update` | 获取批次 + 写回验证结果 |
+| Reporter                 | `report-generator` 工具                  | 程序化生成完整报告      |
 
 ### scan_log.json
 
@@ -279,10 +277,10 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 
 ## 关注的攻击入口
 
-| 文件 | 行号 | 函数 | 入口类型 | 信任等级 | 说明 |
-|------|------|------|----------|----------|------|
-| src/server.c | 123 | handle_request | network | untrusted_network | TCP 公网接口 |
-| app/views.py | 30 | search | web_route | untrusted_network | Flask 搜索路由 |
+| 文件         | 行号 | 函数           | 入口类型  | 信任等级          | 说明           |
+| ------------ | ---- | -------------- | --------- | ----------------- | -------------- |
+| src/server.c | 123  | handle_request | network   | untrusted_network | TCP 公网接口   |
+| app/views.py | 30   | search         | web_route | untrusted_network | Flask 搜索路由 |
 
 ## 关注的威胁场景
 
@@ -292,19 +290,19 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 
 ## 排除的入口
 
-| 文件 | 函数 | 排除原因 |
-|------|------|----------|
-| src/config.c | load_config | 管理员控制的配置文件 |
-| scripts/setup.py | main | 安装脚本，非运行时入口 |
+| 文件             | 函数        | 排除原因               |
+| ---------------- | ----------- | ---------------------- |
+| src/config.c     | load_config | 管理员控制的配置文件   |
+| scripts/setup.py | main        | 安装脚本，非运行时入口 |
 ```
 
 ### 字段说明
 
-| 章节 | 必须 | 说明 |
-|------|------|------|
-| 关注的攻击入口 | 是 | `@architecture` 将这些入口作为 `entry_points` 的基础集合 |
-| 关注的威胁场景 | 是 | `@architecture` 仅对这些场景进行 STRIDE 建模 |
-| 排除的入口 | 是 | `@architecture` 不得将这些入口写入 `entry_points` 和 `attack_surfaces` |
+| 章节           | 必须 | 说明                                                                   |
+| -------------- | ---- | ---------------------------------------------------------------------- |
+| 关注的攻击入口 | 是   | `@architecture` 将这些入口作为 `entry_points` 的基础集合               |
+| 关注的威胁场景 | 是   | `@architecture` 仅对这些场景进行 STRIDE 建模                           |
+| 排除的入口     | 是   | `@architecture` 不得将这些入口写入 `entry_points` 和 `attack_surfaces` |
 
 ### 入口类型枚举
 

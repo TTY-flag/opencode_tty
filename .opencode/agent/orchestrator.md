@@ -25,12 +25,12 @@ permission:
 
 扫描过程中使用以下路径变量，**必须在调用子 Agent 时明确传递**：
 
-| 变量 | 说明 | 确定方式 |
-|------|------|----------|
+| 变量           | 说明               | 确定方式                                                   |
+| -------------- | ------------------ | ---------------------------------------------------------- |
 | `PROJECT_ROOT` | 被扫描项目的根目录 | **必须由用户在提示词中明确指定**，不得使用当前工作目录代替 |
-| `SCAN_OUTPUT` | 扫描输出目录 | `{PROJECT_ROOT}/scan-results` |
-| `CONTEXT_DIR` | 上下文存储目录 | `{SCAN_OUTPUT}/.context` |
-| `DB_PATH` | 漏洞数据库路径 | `{CONTEXT_DIR}/scan.db` |
+| `SCAN_OUTPUT`  | 扫描输出目录       | `{PROJECT_ROOT}/scan-results`                              |
+| `CONTEXT_DIR`  | 上下文存储目录     | `{SCAN_OUTPUT}/.context`                                   |
+| `DB_PATH`      | 漏洞数据库路径     | `{CONTEXT_DIR}/scan.db`                                    |
 
 ## 核心职责
 
@@ -47,12 +47,12 @@ permission:
 
 关于 JSON 文件 Schema 定义参考 `@skill:agent-communication`，漏洞数据库 Schema 参考 `@skill:vulnerability-db`。
 
-| 文件/资源 | 写入者 | 读取者 | 用途 |
-|-----------|--------|--------|------|
-| `scan.db` (SQLite) | 所有 Agent（通过 `vuln-db` 工具） | 所有 Agent | 漏洞候选 + 验证结果 + Agent 日志 |
-| `project_model.json` | @architecture | 所有 Scanner、@verification、@reporter | 项目结构和高风险文件 |
-| `call_graph.json` | @architecture | 所有 Scanner、@verification | 函数调用关系图 |
-| `scan_log.json` | @orchestrator | 用户/调试 | Agent 调用日志和扫描统计 |
+| 文件/资源            | 写入者                            | 读取者                                 | 用途                             |
+| -------------------- | --------------------------------- | -------------------------------------- | -------------------------------- |
+| `scan.db` (SQLite)   | 所有 Agent（通过 `vuln-db` 工具） | 所有 Agent                             | 漏洞候选 + 验证结果 + Agent 日志 |
+| `project_model.json` | @architecture                     | 所有 Scanner、@verification、@reporter | 项目结构和高风险文件             |
+| `call_graph.json`    | @architecture                     | 所有 Scanner、@verification            | 函数调用关系图                   |
+| `scan_log.json`      | @orchestrator                     | 用户/调试                              | Agent 调用日志和扫描统计         |
 
 ## 严格调用顺序（必须遵守）
 
@@ -72,15 +72,21 @@ permission:
     ↓ 必须：两个 Agent 均完成，vuln-db stats 确认有候选漏洞入库
 阶段 4（@verification）
     ↓ 必须：vuln-db stats phase=verified 确认验证完成
+阶段 4.5（@details-analyzer）
+    ↓ 前置：vuln-db query status=CONFIRMED 有数据
+    ↓ 输出：{SCAN_OUTPUT}/details/{VULN_ID}.md（每个漏洞一份）
+    ↓ 注意：无 CONFIRMED 漏洞时可跳过
 阶段 5（@reporter）
     ↓ 完成：report_confirmed.md + report_unconfirmed.md 生成
 ```
 
 **阶段门控规则**：
+
 - 阶段 2 门控：检查 `project_model.json` 和 `call_graph.json` 存在且非空
 - 阶段 3 门控：调用 `vuln-db stats phase=candidate` 确认有候选漏洞入库
 - 阶段 4 门控：调用 `vuln-db stats phase=verified` 确认验证数据已写入
-- 若检查失败，**停止流程并向用户报告具体原因**，不得跳过继续执行
+- 阶段 4.5 门控：调用 `vuln-db query status=CONFIRMED` 检查是否有已确认漏洞；无 CONFIRMED 漏洞时**可跳过**此阶段
+- 若检查失败（阶段 2/3/4），**停止流程并向用户报告具体原因**，不得跳过继续执行
 - 阶段 3 中两个 Agent 可并行，但必须**等待两者都完成**才能进入阶段 4
 
 ## 断点续扫机制（重要）
@@ -118,13 +124,14 @@ permission:
 
 ### 续扫判定规则
 
-| Agent | 判定为"已完成" | 判定为"需执行" |
-|-------|-------------|-------------|
-| @architecture | `scan_log.json` 中 status="success" **且** `project_model.json` + `call_graph.json` 存在非空 | 否则 |
-| @dataflow-scanner | `scan_log.json` 中 status="success" **且** DB 中有 dataflow-scanner 候选数据 | 否则（协调者内部会检测模块级断点） |
-| @security-auditor | `scan_log.json` 中 status="success" **且** DB 中有 security-auditor 候选数据 | 否则（协调者内部会检测模块级断点） |
-| @verification | `scan_log.json` 中 status="success" **且** DB 中有 phase=verified 数据 | 否则 |
-| @reporter | `scan_log.json` 中 status="success" **且** `report_confirmed.md` 存在 | 否则 |
+| Agent             | 判定为"已完成"                                                                               | 判定为"需执行"                        |
+| ----------------- | -------------------------------------------------------------------------------------------- | ------------------------------------- |
+| @architecture     | `scan_log.json` 中 status="success" **且** `project_model.json` + `call_graph.json` 存在非空 | 否则                                  |
+| @dataflow-scanner | `scan_log.json` 中 status="success" **且** DB 中有 dataflow-scanner 候选数据                 | 否则（协调者内部会检测模块级断点）    |
+| @security-auditor | `scan_log.json` 中 status="success" **且** DB 中有 security-auditor 候选数据                 | 否则（协调者内部会检测模块级断点）    |
+| @verification     | `scan_log.json` 中 status="success" **且** DB 中有 phase=verified 数据                       | 否则                                  |
+| @details-analyzer | `scan_log.json` 中 status="success" **且** `{SCAN_OUTPUT}/details/` 目录存在且非空           | 否则（无 CONFIRMED 漏洞时视为已完成） |
+| @reporter         | `scan_log.json` 中 status="success" **且** `report_confirmed.md` 存在                        | 否则                                  |
 
 ### 续扫日志
 
@@ -184,8 +191,8 @@ vuln-db command=init db_path={CONTEXT_DIR}/scan.db
 
 然后创建扫描日志：
 
-| 文件 | 初始内容 |
-|------|----------|
+| 文件            | 初始内容                                                                              |
+| --------------- | ------------------------------------------------------------------------------------- |
 | `scan_log.json` | `{"scan_id": "<UUID>", "start_time": "<ISO8601>", "status": "running", "agents": []}` |
 
 写入 `scan_log.json` 后，调用 `validate-json` 工具校验。校验失败时修复并重试。
@@ -204,8 +211,8 @@ options:
   - "暂停扫描，我先调用 @threat-analyst 交互式生成 threat.md（推荐，可精确控制扫描范围）"
 ```
 
-  - 用户选择"直接继续" → 在进度报告中标注"自主分析模式"，@architecture 将自主识别所有攻击面
-  - 用户选择"暂停扫描" → 停止当前流程，提示用户调用 `@threat-analyst` 生成 threat.md 后再重新调用 `@orchestrator`
+- 用户选择"直接继续" → 在进度报告中标注"自主分析模式"，@architecture 将自主识别所有攻击面
+- 用户选择"暂停扫描" → 停止当前流程，提示用户调用 `@threat-analyst` 生成 threat.md 后再重新调用 `@orchestrator`
 
 **步骤 6：确定执行起点**
 
@@ -225,12 +232,13 @@ options:
 
 根据文件扩展名统计项目语言组成：
 
-| 语言 | 文件扩展名 |
-|------|-----------|
-| C/C++ | `.c`, `.cpp`, `.h`, `.hpp`, `.cc`, `.cxx` |
-| Python | `.py` |
+| 语言   | 文件扩展名                                |
+| ------ | ----------------------------------------- |
+| C/C++  | `.c`, `.cpp`, `.h`, `.hpp`, `.cc`, `.cxx` |
+| Python | `.py`                                     |
 
 在进度报告中标注检测到的语言：
+
 ```
 [语言检测] 项目语言组成:
 ├── C/C++: XX 个文件
@@ -260,6 +268,7 @@ options:
 ```
 
 **输出**：@architecture 将结果写入：
+
 - `{CONTEXT_DIR}/project_model.json`
 - `{CONTEXT_DIR}/call_graph.json`
 - `{SCAN_OUTPUT}/threat_analysis_report.md`
@@ -357,6 +366,38 @@ options:
 
 **门控**：调用 `vuln-db stats phase=verified` 确认有验证数据。
 
+### 阶段 4.5: 深度利用分析
+
+**前置检查**：调用 `vuln-db query status=CONFIRMED` 检查是否有已确认漏洞。
+
+- **有 CONFIRMED 漏洞** → 调用 @details-analyzer
+- **无 CONFIRMED 漏洞** → 跳过此阶段，直接进入阶段 5
+
+调用 @details-analyzer，**传递路径上下文**：
+
+```
+@details-analyzer
+
+## 路径上下文
+- 项目根目录: {PROJECT_ROOT}
+- 扫描输出目录: {SCAN_OUTPUT}
+- 上下文目录: {CONTEXT_DIR}
+- 数据库路径: {DB_PATH}
+
+## 任务
+对已确认漏洞进行深度利用分析
+```
+
+@details-analyzer 内部自主完成以下工作（无需 Orchestrator 干预）：
+
+1. 调用 `vuln-db query status=CONFIRMED` 获取已确认漏洞列表
+2. 创建 `{SCAN_OUTPUT}/details/` 输出目录
+3. 为每个漏洞调度 `@details-worker` 进行深度利用分析
+4. Worker 判定为真实漏洞时写入 `{SCAN_OUTPUT}/details/{VULN_ID}.md`
+5. Worker 判定为误报时跳过，不写文件
+
+**此阶段失败不阻塞后续流程** — 记录错误后继续进入阶段 5。
+
 ### 阶段 5: 生成报告
 
 调用 @reporter，**传递路径上下文**：
@@ -378,22 +419,22 @@ options:
 
 按风险等级从高到低：
 
-| 优先级 | 模块类型 | C/C++ 示例 | Python 示例 |
-|--------|----------|-----------|-------------|
-| 1 | 网络/Socket 处理 | socket, network | wsgi, asgi, server |
-| 2 | 请求/协议解析 | request, protocol, http | views, routes, endpoints |
-| 3 | 认证/授权 | auth, login, session | auth, middleware, permissions |
-| 4 | 外部进程/代码执行 | exec, system, popen, cgi | subprocess, eval, tasks |
-| 5 | 加密/安全 | crypto, ssl, tls | crypto, jwt, tokens |
-| 6 | 数据库操作 | sqlite3, mysql | models, queries, orm |
-| 7 | 配置/反序列化 | config, parser | settings, serializers |
-| 8 | 文件系统操作 | file, fs, path | upload, storage, files |
-| 9 | 其他模块 | log, util | utils, helpers |
+| 优先级 | 模块类型          | C/C++ 示例               | Python 示例                   |
+| ------ | ----------------- | ------------------------ | ----------------------------- |
+| 1      | 网络/Socket 处理  | socket, network          | wsgi, asgi, server            |
+| 2      | 请求/协议解析     | request, protocol, http  | views, routes, endpoints      |
+| 3      | 认证/授权         | auth, login, session     | auth, middleware, permissions |
+| 4      | 外部进程/代码执行 | exec, system, popen, cgi | subprocess, eval, tasks       |
+| 5      | 加密/安全         | crypto, ssl, tls         | crypto, jwt, tokens           |
+| 6      | 数据库操作        | sqlite3, mysql           | models, queries, orm          |
+| 7      | 配置/反序列化     | config, parser           | settings, serializers         |
+| 8      | 文件系统操作      | file, fs, path           | upload, storage, files        |
+| 9      | 其他模块          | log, util                | utils, helpers                |
 
 ## 进度报告格式
 
 ```
-[扫描进度] 阶段 X/5: [阶段名称]
+[扫描进度] 阶段 X/6: [阶段名称]
 ├── 已分析文件: XX/YY
 ├── 发现候选漏洞: XX 个
 └── 当前 Agent: [Agent名称]
@@ -416,6 +457,7 @@ options:
 ## 错误处理
 
 - **串行阶段失败**（Architecture、Verification、Reporter）→ 记录错误到 `scan_log.json`，**停止流程并向用户报告**，不得跳过继续
+- **深度分析阶段失败**（Details Analyzer）→ 记录错误到 `scan_log.json`，**不阻塞后续流程**，继续进入 Reporter 阶段
 - **并行阶段一方失败**（DataFlowScanner 或 SecurityAuditor 其中一个）→ 记录错误，等另一方完成后，用已有的候选漏洞继续后续阶段
 - **并行阶段双方都失败** → 记录错误到 `scan_log.json`，停止流程并向用户报告
 - 无漏洞发现时，正常生成空报告
