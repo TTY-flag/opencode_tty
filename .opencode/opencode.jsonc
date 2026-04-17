@@ -15,17 +15,18 @@
     "list": "allow",
     // LSP 代码智能（实验性功能）
     "lsp": "allow",
-    // 网络访问需要确认
-    "webfetch": "ask",
+    // 网络访问（用于漏洞利用分析时搜索 CVE、已知利用方式等）
+    "webfetch": "allow",
+    "websearch": "allow",
     // bash 命令权限（允许所有命令）
     "bash": {
-      "*": "allow"
+      "*": "allow",
     },
     // 任务管理
     "todowrite": "allow",
     "todoread": "allow",
     // 用户交互
-    "question": "allow"
+    "question": "allow",
   },
   "provider": {
     "opencode": {
