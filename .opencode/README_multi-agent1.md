@@ -86,6 +86,28 @@
                           │
                           ▼
               ┌───────────────────────┐
+              │  Details Analyzer     │  ← 阶段3.5: 深度利用分析
+              │   (协调者)            │    （无 CONFIRMED 漏洞时跳过）
+              │                       │
+              │ ┌───────────────┐     │
+              │ │Details Worker │     │
+              │ │  (VULN-001)   │     │  ← 逐个漏洞深度分析
+              │ ├───────────────┤     │    误报则跳过，真实则生成报告
+              │ │Details Worker │     │
+              │ │  (VULN-002)   │     │
+              │ ├───────────────┤     │
+              │ │Details Worker │     │
+              │ │  (VULN-N)     │     │
+              │ └───────────────┘     │
+              │                       │
+              │   输入: scan.db       │
+              │     (CONFIRMED 漏洞)  │
+              │   输出: details/      │
+              │     {VULN_ID}.md      │
+              └───────────┬───────────┘
+                          │
+                          ▼
+              ┌───────────────────────┐
               │       Reporter        │  ← 阶段4: 报告生成
               │   • report-generator  │
               │     (程序化生成全量)  │
@@ -130,6 +152,8 @@
 | **python-security-module-scanner** | 模块文件列表<br>调用图子集                | `scan.db`（vuln-db insert）                                              | 单模块 Python 安全审计（子Agent）                            |
 | **verification**                   | `scan.db`（候选漏洞）                     | `scan.db`（验证结果）                                                    | 协调漏洞验证：去重 + 分批调度 + 跨模块验证                   |
 | **verification-worker**            | `scan.db`（批次漏洞ID）<br>调用图子集     | `scan.db`（vuln-db batch-update）                                        | 单批次深度验证 + 置信度评分 + 严重性重评估（子Agent）        |
+| **details-analyzer**               | `scan.db`（CONFIRMED 漏洞）               | 调度 details-worker                                                      | 协调深度利用分析：逐个漏洞调度 worker                        |
+| **details-worker**                 | `scan.db`（单个漏洞ID）<br>调用图子集     | `{SCAN_OUTPUT}/details/{VULN_ID}.md`                                     | 单个漏洞深度利用分析，误报则跳过不生成报告（子Agent）        |
 | **reporter**                       | `scan.db`<br>`project_model.json`         | `report.md`                                                              | report-generator 生成全量骨架 + LLM 补充分析                 |
 
 ## 核心特性
@@ -151,6 +175,7 @@
 - **评分规则可配置**: 置信度评分规则可通过 `scoring_rules.json` 自定义
 - **SQLite 数据库存储**: 漏洞数据存储在 SQLite 数据库（`scan.db`）中，替代分散的 JSON 中间文件，确保数据一致性和查询效率
 - **程序化报告生成**: 使用 `report-generator` 工具从数据库程序化生成 100% 完整的报告，解决 LLM 输出截断问题
+- **深度利用分析**: Details Analyzer 对已确认漏洞逐个进行深度利用分析，构造攻击链路、PoC 和验证环境，分析过程中发现误报则自动过滤
 - **模块化 Skill**: 知识型能力（污点规则、评分方法等）提取为独立 Skill，便于维护和扩展，支持多语言独立规则文件
 
 ## 快速开始
@@ -210,6 +235,8 @@ opencode
 | python-security-module-scanner | subagent | 单模块 Python 安全审计 + vuln-db insert                         | 由 security-auditor 调用 |
 | verification                   | subagent | **协调者**：vuln-db dedup + 分批调度验证 + 跨模块验证           | @verification            |
 | verification-worker            | subagent | 单批次深度验证 + 置信度评分 + vuln-db batch-update              | 由 verification 调用     |
+| details-analyzer               | subagent | **协调者**：查询 CONFIRMED 漏洞，逐个调度 details-worker        | @details-analyzer        |
+| details-worker                 | subagent | 单个漏洞深度利用分析，误报跳过，真实漏洞生成报告                | 由 details-analyzer 调用 |
 | reporter                       | subagent | report-generator 生成骨架 + LLM 补充分析                        | @reporter                |
 
 ### 层级架构
@@ -254,6 +281,21 @@ DataFlow Scanner、Security Auditor 和 Verification 都采用协调者-工作�
     └── vuln-db stats phase=verified（汇总验证结果）
 ```
 
+```
+@details-analyzer (协调者)
+    │
+    ├── vuln-db query status=CONFIRMED（获取已确认漏洞列表）
+    ├── 读取 call_graph.json + project_model.json
+    │
+    ├── @details-worker (VULN-001)
+    │       └── 深度利用分析 → 写入 details/VULN-001.md（或判定误报跳过）
+    │
+    ├── @details-worker (VULN-002)
+    │       └── ...
+    │
+    └── 汇总统计（分析了多少、跳过了多少）
+```
+
 **优势**：
 
 - 每个子 Agent 只处理一个模块/批次，避免上下文爆炸
@@ -275,7 +317,7 @@ DataFlow Scanner、Security Auditor 和 Verification 都采用协调者-工作�
 | confidence-scoring    | `.opencode/skill/confidence-scoring/`    | 置信度评分方法（含一票否决）                      | verification-worker                                           |
 | cross-file-analysis   | `.opencode/skill/cross-file-analysis/`   | 跨文件追踪方法（支持 C/C++ 和 Python）            | architecture, 所有 Scanner, verification, verification-worker |
 | agent-communication   | `.opencode/skill/agent-communication/`   | 路径约定、JSON Schema                             | 所有 Agent                                                    |
-| vulnerability-db      | `.opencode/skill/vulnerability-db/`      | SQLite 数据库 Schema、vuln-db 工具 API            | 所有 Scanner, verification, reporter                          |
+| vulnerability-db      | `.opencode/skill/vulnerability-db/`      | SQLite 数据库 Schema、vuln-db 工具 API            | 所有 Scanner, verification, details-analyzer, reporter        |
 | bun-file-io           | `.opencode/skill/bun-file-io/`           | Bun 文件 I/O 最佳实践                             | 所有需要文件操作的 Agent                                      |
 
 ### 扩展新语言
@@ -436,7 +478,7 @@ Verification Worker → 发现调用链不完整
 
 ## 报告结构
 
-系统生成两份独立报告，避免内容重复：
+系统生成三类报告，各有侧重：
 
 ### 威胁分析报告 (`threat_analysis_report.md`)
 
@@ -462,6 +504,19 @@ Verification Worker → 发现调用链不完整
 5. **CWE 分布**: 统计
 6. **执行摘要 + 深度分析**: LLM 补充的增值内容
 
+### 深度利用分析报告 (`details/{VULN_ID}.md`)
+
+由 Details Worker 逐个漏洞生成，每个已确认漏洞一份独立报告（误报则不生成）。每份报告包含：
+
+1. **漏洞细节**: 完整技术描述，漏洞成因和触发机制
+2. **漏洞代码**: 扩展代码上下文（±50行），标注漏洞关键行
+3. **完整攻击链路**: 从入口点到漏洞触发的每一步，含代码引用
+4. **攻击场景**: 攻击者画像、攻击向量、利用步骤、利用难度
+5. **攻击条件**: 网络可达性、认证要求、配置依赖、环境依赖
+6. **造成影响**: CIA 三元组影响评估和影响范围
+7. **PoC (概念验证)**: 可用于验证的代码/命令（如果可构造）
+8. **验证环境搭建**: 基础环境、构建步骤、运行配置、验证步骤
+
 ## 项目结构
 
 ```
@@ -469,7 +524,7 @@ your-project/
 ├── threat.md（可选）            # 分析人员定义的攻击面约束，约束 AI 识别范围
 │                                # 可手动编写或由 @threat-analyst 交互式生成
 ├── .opencode/
-│   ├── agent/                      # Agent 定义（12 个）
+│   ├── agent/                      # Agent 定义（14 个）
 │   │   ├── orchestrator.md         # 扫描协调者（primary）
 │   │   ├── threat-analyst.md       # 交互式威胁分析（primary）
 │   │   ├── architecture.md         # 架构分析、语言检测
@@ -481,6 +536,8 @@ your-project/
 │   │   ├── python-security-module-scanner.md  # Python 模块级审计子Agent
 │   │   ├── verification.md         # 漏洞验证协调者
 │   │   ├── verification-worker.md  # 模块级验证子Agent
+│   │   ├── details-analyzer.md     # 深度利用分析协调者
+│   │   ├── details-worker.md       # 单个漏洞深度利用分析子Agent
 │   │   └── reporter.md             # 报告生成
 │   ├── skill/                      # Skill 定义（8 个）
 │   │   ├── agent-communication/    # Agent 间通信规范
@@ -518,7 +575,11 @@ your-project/
     │   ├── scan_log.json           # 扫描日志（orchestrator 输出）
     │   └── scoring_rules.json      # 评分规则（可选，自定义置信度评分）
     ├── threat_analysis_report.md   # 威胁分析报告（architecture 输出）
-    └── report.md                   # 最终漏洞报告（reporter 输出）
+    ├── report.md                   # 最终漏洞报告（reporter 输出）
+    └── details/                    # 深度利用分析报告（details-worker 输出）
+        ├── VULN-DF-MEM-001.md      # 单个漏洞的深度分析（仅真实漏洞）
+        ├── VULN-SEC-AUTH-003.md
+        └── ...
 ```
 
 ### 路径约定
