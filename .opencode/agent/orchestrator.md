@@ -74,8 +74,10 @@ permission:
     ↓ 必须：vuln-db stats phase=verified 确认验证完成
 阶段 4.5（@details-analyzer）
     ↓ 前置：vuln-db query status=CONFIRMED 有数据
+    ↓ [门控] 检查 {SCAN_OUTPUT}/details/ 目录，确认每个 CONFIRMED 漏洞都有对应报告文件
     ↓ 输出：{SCAN_OUTPUT}/details/{VULN_ID}.md（每个漏洞一份）
     ↓ 注意：无 CONFIRMED 漏洞时可跳过
+    ↓ 注意：若有 CONFIRMED 漏洞但报告文件不完整，必须继续分析未完成的漏洞
 阶段 5（@reporter）
     ↓ 完成：report_confirmed.md + report_unconfirmed.md 生成
 ```
@@ -85,7 +87,12 @@ permission:
 - 阶段 2 门控：检查 `project_model.json` 和 `call_graph.json` 存在且非空
 - 阶段 3 门控：调用 `vuln-db stats phase=candidate` 确认有候选漏洞入库
 - 阶段 4 门控：调用 `vuln-db stats phase=verified` 确认验证数据已写入
-- 阶段 4.5 门控：调用 `vuln-db query status=CONFIRMED` 检查是否有已确认漏洞；无 CONFIRMED 漏洞时**可跳过**此阶段
+- 阶段 4.5 门控：
+  1. 调用 `vuln-db query status=CONFIRMED` 获取所有已确认漏洞的 ID 列表
+  2. 检查 `{SCAN_OUTPUT}/details/` 目录，列出已存在的报告文件
+  3. 对比确认：每个 CONFIRMED 漏洞 ID 都有对应的 `{VULN_ID}.md` 文件
+  4. 无 CONFIRMED 漏洞时**可跳过**此阶段
+  5. 有 CONFIRMED 漏洞但报告不完整时，**必须继续分析**未完成的漏洞
 - 若检查失败（阶段 2/3/4），**停止流程并向用户报告具体原因**，不得跳过继续执行
 - 阶段 3 中两个 Agent 可并行，但必须**等待两者都完成**才能进入阶段 4
 
@@ -118,6 +125,12 @@ permission:
 ├── verification: status = "success"
 │   └── vuln-db stats phase=verified 确认有验证数据 → 跳过阶段 4
 │
+├── details-analyzer: status = "success"
+│   └── 检查 {SCAN_OUTPUT}/details/ 目录：
+│       ├── 无 CONFIRMED 漏洞 → 视为已完成，跳过
+│       ├── 每个 CONFIRMED 漏洞都有对应报告文件 → 跳过阶段 4.5
+│       └── 有未完成的漏洞 → 调用 @details-analyzer（仅分析未完成的漏洞）
+│
 └── reporter: status = "success"
     └── report_confirmed.md 存在 → 跳过阶段 5
 ```
@@ -130,7 +143,7 @@ permission:
 | @dataflow-scanner | `scan_log.json` 中 status="success" **且** DB 中有 dataflow-scanner 候选数据                 | 否则（协调者内部会检测模块级断点）    |
 | @security-auditor | `scan_log.json` 中 status="success" **且** DB 中有 security-auditor 候选数据                 | 否则（协调者内部会检测模块级断点）    |
 | @verification     | `scan_log.json` 中 status="success" **且** DB 中有 phase=verified 数据                       | 否则                                  |
-| @details-analyzer | `scan_log.json` 中 status="success" **且** `{SCAN_OUTPUT}/details/` 目录存在且非空           | 否则（无 CONFIRMED 漏洞时视为已完成） |
+| @details-analyzer | `scan_log.json` 中 status="success" **且** 每个 CONFIRMED 漏洞都有对应 `{SCAN_OUTPUT}/details/{VULN_ID}.md` 文件 | 否则（无 CONFIRMED 漏洞时视为已完成；有未完成漏洞时仅分析未完成的） |
 | @reporter         | `scan_log.json` 中 status="success" **且** `report_confirmed.md` 存在                        | 否则                                  |
 
 ### 续扫日志
