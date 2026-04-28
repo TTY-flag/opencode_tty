@@ -108,8 +108,9 @@ flowchart TD
 | 项目模型 | `{SCAN_OUTPUT}/.context/project_model.json` | 语言、模块、入口点、框架、信任边界、稳定 ID、证据和扫描范围 |
 | 调用图 | `{SCAN_OUTPUT}/.context/call_graph.json` | 风险相关稀疏调用图、数据流路径和未解析动态调用 |
 | 漏洞数据库 | `{SCAN_OUTPUT}/.context/scan.db` | 候选漏洞、验证结果、work item 队列、agent 日志 |
+| 本次扫描深度配置 | `{SCAN_OUTPUT}/.context/scan_profile.json` | Orchestrator 解析后的实际 profile、轮数和补扫策略 |
 | 扫描日志 | `{SCAN_OUTPUT}/.context/scan_log.json` | 各阶段状态、耗时、输出文件 |
-| 扫描深度配置 | `{PROJECT_ROOT}/.opencode/scan-profiles.json` | `quick` / `standard` / `deep` / `paranoid` 的轮数和补扫策略 |
+| 扫描深度模板 | `.opencode/scan-profiles.json` | `quick` / `standard` / `deep` / `paranoid` 的轮数和补扫策略；缺失时使用内置 `deep` 兜底 |
 
 默认 `SCAN_OUTPUT` 为：
 
@@ -125,6 +126,7 @@ scan-results/
 │   ├── scan.db
 │   ├── project_model.json
 │   ├── call_graph.json
+│   ├── scan_profile.json
 │   ├── scan_log.json
 │   └── scoring_rules.json
 ├── threat_analysis_report.md
@@ -151,6 +153,7 @@ your-target-project/
 │   ├── skill/
 │   ├── tool/
 │   ├── language/
+│   ├── scan-profiles.json
 │   └── opencode.jsonc
 └── ...
 ```
@@ -279,6 +282,8 @@ flowchart LR
 | `paranoid` | 5 | 对高风险空结果和不确定调用边做额外一致性检查 |
 
 每个 worker 都必须返回 `COVERAGE_LEDGER`，由 coordinator 写入 `scan_coverage`。如果发现 `expansion_needed`、`shallow`、`partial`，且尚未达到 `MAX_ROUNDS`，coordinator 会继续生成下一轮 work item。
+
+Orchestrator 会先调用 `scan-profile-resolver`，把最终采用的配置写入 `{SCAN_OUTPUT}/.context/scan_profile.json`。后续 scanner 读取这个已解析文件，不再自己寻找原始 `scan-profiles.json`。如果目标项目没有复制 `scan-profiles.json`，会自动使用 harness 自带配置；仍找不到时使用内置 `deep` 兜底，并在 `scan_profile.json.warnings` 中记录原因。
 
 ## 多语言分发规则
 
@@ -467,7 +472,9 @@ vuln-db command=work-stats db_path={SCAN_OUTPUT}/.context/scan.db agent_name=dat
 ├── tool/
 │   ├── vuln-db.ts
 │   ├── report-generator.ts
+│   ├── scan-profile-resolver.ts
 │   └── validate-json.ts
+├── scan-profiles.json
 └── opencode.jsonc
 ```
 

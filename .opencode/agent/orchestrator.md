@@ -31,8 +31,9 @@ permission:
 | `SCAN_OUTPUT`  | 扫描输出目录       | `{PROJECT_ROOT}/scan-results`                              |
 | `CONTEXT_DIR`  | 上下文存储目录     | `{SCAN_OUTPUT}/.context`                                   |
 | `DB_PATH`      | 漏洞数据库路径     | `{CONTEXT_DIR}/scan.db`                                    |
-| `SCAN_PROFILE` | 扫描深度档位       | 用户指定；未指定时读取 `{PROJECT_ROOT}/.opencode/scan-profiles.json` 的 `default_profile` |
-| `MAX_ROUNDS`   | Scanner 最大轮数   | 由 `SCAN_PROFILE` 决定                                     |
+| `SCAN_PROFILE_PATH` | 已解析扫描深度配置 | `{CONTEXT_DIR}/scan_profile.json`，由 `scan-profile-resolver` 写入 |
+| `SCAN_PROFILE` | 扫描深度档位       | 用户指定；未指定时由 `scan-profile-resolver` 从配置或内置默认值解析 |
+| `MAX_ROUNDS`   | Scanner 最大轮数   | 由 `SCAN_PROFILE_PATH` 中的 `max_rounds` 决定               |
 
 ## 核心职责
 
@@ -54,7 +55,7 @@ permission:
 | `scan.db` (SQLite)   | 所有 Agent（通过 `vuln-db` 工具） | 所有 Agent                             | 漏洞候选 + 验证结果 + Agent 日志 |
 | `project_model.json` | @architecture                     | 所有 Scanner、@verification、@reporter | 项目结构和高风险文件             |
 | `call_graph.json`    | @architecture                     | 所有 Scanner、@verification            | 函数调用关系图                   |
-| `scan-profiles.json` | harness                           | @orchestrator、Scanner Coordinator     | 扫描深度档位、轮数和补扫策略     |
+| `scan_profile.json`  | @orchestrator（通过 `scan-profile-resolver`） | Scanner Coordinator、用户/调试 | 本次扫描实际使用的深度档位和补扫策略 |
 | `scan_log.json`      | @orchestrator                     | 用户/调试                              | Agent 调用日志和扫描统计         |
 
 ## 严格调用顺序（必须遵守）
@@ -62,8 +63,8 @@ permission:
 **绝对禁止跳过任何阶段或乱序调用。每个阶段必须在前一阶段成功完成后才能开始。**
 
 ```
-阶段 0（初始化 + 数据库创建）
-    ↓ 必须：目录创建成功，vuln-db init 完成
+阶段 0（初始化 + 数据库创建 + 扫描深度解析）
+    ↓ 必须：目录创建成功，vuln-db init 完成，scan_profile.json 写入并校验通过
 阶段 1（项目结构分析）
     ↓ 必须：识别到 C/C++、Python、Go、Lua 或 Java 源文件
 阶段 2（@architecture）
@@ -99,11 +100,18 @@ permission:
   5. 有 CONFIRMED 漏洞但报告不完整时，**必须继续分析**未完成的漏洞
 - 若检查失败（阶段 2/3/4），**停止流程并向用户报告具体原因**，不得跳过继续执行
 - 阶段 3 中两个 Agent 可并行，但必须**等待两者都完成**才能进入阶段 4
-- 阶段 3 的“完成”不仅要求无 pending/running/failed work item，还要求 `vuln-db coverage-stats` 中不存在未处理的 `expansion_needed` / `shallow` / `partial` 记录；若 `SCAN_PROFILE.max_rounds` 尚未耗尽，必须继续补扫。
+- 阶段 3 的“完成”不仅要求无 pending/running/failed work item，还要求 `vuln-db coverage-stats` 中不存在未处理的 `expansion_needed` / `shallow` / `partial` 记录；若 `MAX_ROUNDS` 尚未耗尽，必须继续补扫。
 
 ## 扫描深度档位（让扫描更长但可控）
 
-扫描深度由 `{PROJECT_ROOT}/.opencode/scan-profiles.json` 控制。若用户没有显式指定，默认使用 `deep`。
+扫描深度由 Orchestrator 在初始化阶段统一解析，解析结果写入 `{CONTEXT_DIR}/scan_profile.json`。不要让 Scanner Coordinator 或 Worker 自行寻找原始 `scan-profiles.json`。
+
+解析顺序：
+
+1. 用户提示中显式指定的 `quick`、`standard`、`deep` 或 `paranoid`
+2. `{PROJECT_ROOT}/.opencode/scan-profiles.json` 的 `default_profile`
+3. harness 自带 `.opencode/scan-profiles.json`
+4. 内置默认配置 `deep`
 
 | profile | max_rounds | 用途 |
 | ------- | ---------- | ---- |
@@ -117,10 +125,11 @@ Orchestrator 必须把以下信息传给 `@dataflow-scanner` 和 `@security-audi
 ```text
 ## 扫描深度
 - SCAN_PROFILE: [quick|standard|deep|paranoid]
-- MAX_ROUNDS: [来自 scan-profiles.json]
+- MAX_ROUNDS: [来自 {CONTEXT_DIR}/scan_profile.json]
 - require_negative_evidence: [true/false]
 - rescan_high_risk_empty_modules: [true/false]
 - duplicate_high_risk_review: [true/false]
+- SCAN_PROFILE_PATH: {CONTEXT_DIR}/scan_profile.json
 ```
 
 每轮结束后必须调用：
@@ -220,9 +229,21 @@ mkdir -p {CONTEXT_DIR}
 
 **步骤 3：确定扫描深度**
 
-读取 `{PROJECT_ROOT}/.opencode/scan-profiles.json`。如果用户提示中包含 `quick`、`standard`、`deep` 或 `paranoid`，使用用户指定档位；否则使用文件中的 `default_profile`。
+调用 `scan-profile-resolver` 工具解析扫描深度，并写入 `{CONTEXT_DIR}/scan_profile.json`：
 
-将 `SCAN_PROFILE`、`MAX_ROUNDS` 和 profile 配置写入 `scan_log.json`，并在后续调用 scanner coordinator 时传递。
+```text
+scan-profile-resolver project_root={PROJECT_ROOT} context_dir={CONTEXT_DIR} scan_profile=[用户显式指定的 quick|standard|deep|paranoid，可省略]
+```
+
+解析完成后必须读取 `{CONTEXT_DIR}/scan_profile.json`，提取：
+
+- `SCAN_PROFILE = scan_profile`
+- `MAX_ROUNDS = max_rounds`
+- `profile_config`
+
+然后调用 `validate-json` 校验 `{CONTEXT_DIR}/scan_profile.json`。如果 `scan-profile-resolver` 报告找不到原始 `scan-profiles.json`，但已经使用内置默认配置写入了 `scan_profile.json`，流程可以继续；需要把 warning 写入 `scan_log.json`。
+
+将 `SCAN_PROFILE`、`MAX_ROUNDS`、`SCAN_PROFILE_PATH` 和 profile 配置写入 `scan_log.json`，并在后续调用 scanner coordinator 时传递。Scanner Coordinator 不再自行读取原始 `scan-profiles.json`。
 
 **步骤 4：断点续扫检测**
 
@@ -248,7 +269,7 @@ vuln-db command=init db_path={CONTEXT_DIR}/scan.db
 
 | 文件            | 初始内容                                                                              |
 | --------------- | ------------------------------------------------------------------------------------- |
-| `scan_log.json` | `{"scan_id": "<UUID>", "start_time": "<ISO8601>", "status": "running", "scan_profile": "<SCAN_PROFILE>", "max_rounds": <MAX_ROUNDS>, "agents": []}` |
+| `scan_log.json` | `{"scan_id": "<UUID>", "start_time": "<ISO8601>", "status": "running", "scan_profile": "<SCAN_PROFILE>", "scan_profile_path": "{CONTEXT_DIR}/scan_profile.json", "max_rounds": <MAX_ROUNDS>, "agents": []}` |
 
 写入 `scan_log.json` 后，调用 `validate-json` 工具校验。校验失败时修复并重试。
 
@@ -365,7 +386,8 @@ options:
 ## 扫描深度
 - SCAN_PROFILE: {SCAN_PROFILE}
 - MAX_ROUNDS: {MAX_ROUNDS}
-- profile 配置: [从 scan-profiles.json 读取的当前 profile 对象]
+- SCAN_PROFILE_PATH: {CONTEXT_DIR}/scan_profile.json
+- profile 配置: [从 {CONTEXT_DIR}/scan_profile.json 读取的 profile_config 对象]
 
 ## 任务
 扫描数据流漏洞
@@ -389,7 +411,8 @@ options:
 ## 扫描深度
 - SCAN_PROFILE: {SCAN_PROFILE}
 - MAX_ROUNDS: {MAX_ROUNDS}
-- profile 配置: [从 scan-profiles.json 读取的当前 profile 对象]
+- SCAN_PROFILE_PATH: {CONTEXT_DIR}/scan_profile.json
+- profile 配置: [从 {CONTEXT_DIR}/scan_profile.json 读取的 profile_config 对象]
 
 ## 任务
 审计安全逻辑（认证授权、密码学）

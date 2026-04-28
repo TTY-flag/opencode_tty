@@ -48,6 +48,7 @@ const SUPPORTED_LANGUAGES = new Set(["c_cpp", "python", "go", "lua", "java"])
 const MODULE_LANGUAGES = new Set([...SUPPORTED_LANGUAGES, "mixed"])
 const CONFIDENCE_VALUES = new Set(["high", "medium", "low"])
 const ANALYSIS_BACKENDS = new Set(["lsp", "grep", "language_rule", "manual", "model_inference"])
+const SCAN_PROFILE_NAMES = new Set(["quick", "standard", "deep", "paranoid"])
 
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -311,10 +312,39 @@ function validateCallGraph(data: unknown): Diagnostics {
   return { errors, warnings, schemaName: "call_graph" }
 }
 
+function validateScanProfile(data: unknown): Diagnostics {
+  const errors: string[] = []
+  const warnings: string[] = []
+  const root = requireObject(data, "$", errors)
+  if (!root) return { errors, warnings, schemaName: "scan_profile" }
+
+  if (root.schema_version !== "1.0") errors.push("$.schema_version must be \"1.0\"")
+  checkEnum(root.scan_profile, SCAN_PROFILE_NAMES, "$.scan_profile", errors)
+  if (typeof root.max_rounds !== "number" || root.max_rounds < 1) errors.push("$.max_rounds must be a number >= 1")
+  const config = requireObject(root.profile_config, "$.profile_config", errors)
+  if (config) {
+    if (typeof config.max_rounds !== "number" || config.max_rounds < 1) errors.push("$.profile_config.max_rounds must be a number >= 1")
+    if (typeof config.max_expansions_per_module !== "number") errors.push("$.profile_config.max_expansions_per_module must be a number")
+    if (typeof config.rescan_high_risk_empty_modules !== "boolean") {
+      errors.push("$.profile_config.rescan_high_risk_empty_modules must be a boolean")
+    }
+    if (typeof config.require_negative_evidence !== "boolean") errors.push("$.profile_config.require_negative_evidence must be a boolean")
+    if (typeof config.duplicate_high_risk_review !== "boolean") {
+      errors.push("$.profile_config.duplicate_high_risk_review must be a boolean")
+    }
+  }
+  requireString(root, "source", "$", errors)
+  if (root.available_profiles !== undefined) stringArray(root.available_profiles, "$.available_profiles", errors)
+  if (root.warnings !== undefined) stringArray(root.warnings, "$.warnings", errors)
+
+  return { errors, warnings, schemaName: "scan_profile" }
+}
+
 function collectSchemaDiagnostics(filename: string, data: unknown): Diagnostics | null {
   const lower = filename.toLowerCase()
   if (lower === "project_model.json") return validateProjectModel(data)
   if (lower === "call_graph.json") return validateCallGraph(data)
+  if (lower === "scan_profile.json") return validateScanProfile(data)
   return null
 }
 

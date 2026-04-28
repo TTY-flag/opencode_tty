@@ -16,7 +16,7 @@ Every generated `project_model.json` file must mark each source file with one of
 - Treat `call_graph.json` as a risk-focused sparse graph. It should contain `nodes`, `edges`, `data_flows`, and `unresolved`, not a full-project graph.
 - Do not promote model-only inference to a high-confidence fact.
 - Every scanner work item must produce a `COVERAGE_LEDGER` summary. Coordinators must persist it with `vuln-db coverage-add` before marking the work item complete.
-- Use `scan-profiles.json` to control scan duration. `deep` is the default for vulnerability hunting.
+- Use `scan-profile-resolver` to normalize scan duration into `{CONTEXT_DIR}/scan_profile.json`. `deep` is the default for vulnerability hunting, and scanners should consume the resolved profile instead of searching for `scan-profiles.json`.
 
 ## Evidence First
 

@@ -20,6 +20,7 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 | `SCAN_OUTPUT`  | 扫描输出目录       | `{PROJECT_ROOT}/scan-results`                    |
 | `CONTEXT_DIR`  | 上下文存储目录     | `{SCAN_OUTPUT}/.context`                         |
 | `DB_PATH`      | 漏洞数据库路径     | `{CONTEXT_DIR}/scan.db`                          |
+| `SCAN_PROFILE_PATH` | 已解析扫描深度配置 | `{CONTEXT_DIR}/scan_profile.json`，由 Orchestrator 统一写入 |
 
 ### 路径确定流程
 
@@ -31,7 +32,8 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 5. 拼接 DB_PATH = {CONTEXT_DIR}/scan.db
 6. 创建目录: mkdir -p {CONTEXT_DIR}
 7. 初始化数据库: vuln-db command=init db_path={DB_PATH}
-8. 后续所有子 Agent 调用时传递这四个路径
+8. 调用 scan-profile-resolver，写入 SCAN_PROFILE_PATH = {CONTEXT_DIR}/scan_profile.json
+9. 后续所有子 Agent 调用时传递这些路径和已解析 profile 配置
 ```
 
 ### 调用子 Agent 时传递路径
@@ -46,6 +48,7 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 - 扫描输出目录: {SCAN_OUTPUT}
 - 上下文目录: {CONTEXT_DIR}
 - 数据库路径: {DB_PATH}
+- 扫描深度配置: {SCAN_PROFILE_PATH}
 
 ## 任务
 [具体任务内容...]
@@ -72,8 +75,10 @@ Scanner 写入候选漏洞时必须设置 `analysis_kind`：
 | -------------------- | ------------- | --------------------------------------------------------- | ------------------------ |
 | `project_model.json` | @architecture | 所有 Scanner、@verification、@reporter、@details-analyzer | 项目结构和高风险文件     |
 | `call_graph.json`    | @architecture | 所有 Scanner、@verification、@details-analyzer            | 函数调用关系图           |
+| `scan_profile.json`  | @orchestrator（通过 `scan-profile-resolver`） | Scanner Coordinator、用户/调试 | 本次扫描实际使用的深度档位和补扫策略 |
 | `scan_log.json`      | @orchestrator | 用户/调试                                                 | Agent 调用日志和扫描统计 |
 | `scoring_rules.json` | 用户（可选）  | @verification、@verification-worker                       | 自定义置信度评分规则     |
+| `.opencode/scan-profiles.json` | harness 配置（可选） | @orchestrator | 扫描深度档位模板；找不到时使用内置默认值 |
 | `.opencode/language/*.json` | 项目配置 | @architecture、@dataflow-scanner、@security-auditor、语言 worker | 语言扩展名、框架、Source/Sink/Sanitizer 规则 |
 
 ### 约束文件
@@ -411,6 +416,31 @@ Work item JSON 示例：
 | Verification Worker      | `vuln-db query` + `vuln-db batch-update` | 获取批次 + 写回验证结果 |
 | Reporter                 | `report-generator` 工具                  | 程序化生成完整报告      |
 
+### scan_profile.json
+
+`scan_profile.json` 是本次扫描的实际配置，由 Orchestrator 调用 `scan-profile-resolver` 生成。Scanner Coordinator 必须读取这个文件或使用 Orchestrator 传入的同等内容，不要自行寻找原始 `scan-profiles.json`。
+
+```json
+{
+  "schema_version": "1.0",
+  "scan_profile": "deep",
+  "max_rounds": 4,
+  "profile_config": {
+    "max_rounds": 4,
+    "max_expansions_per_module": 3,
+    "rescan_high_risk_empty_modules": true,
+    "require_negative_evidence": true,
+    "duplicate_high_risk_review": true,
+    "description": "Longer audit scan."
+  },
+  "source": "D:/project/.opencode/scan-profiles.json",
+  "requested_profile": null,
+  "available_profiles": ["quick", "standard", "deep", "paranoid"],
+  "warnings": [],
+  "resolved_at": "ISO8601"
+}
+```
+
 ### scan_log.json
 
 ```json
@@ -422,6 +452,7 @@ Work item JSON 示例：
   "project_name": "项目名称",
   "status": "completed|failed|partial",
   "scan_profile": "quick|standard|deep|paranoid",
+  "scan_profile_path": "{CONTEXT_DIR}/scan_profile.json",
   "max_rounds": 4,
   "profile_config": {
     "max_expansions_per_module": 3,

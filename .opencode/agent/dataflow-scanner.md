@@ -96,7 +96,9 @@ dataflow-scanner (协调者 - 你)
 
 从 Orchestrator 接收：
 - **路径上下文**：项目根目录、扫描输出目录、上下文目录
-- **扫描深度**：`SCAN_PROFILE`、`MAX_ROUNDS`、profile 配置（来自 `scan-profiles.json`）
+- **扫描深度**：`SCAN_PROFILE`、`MAX_ROUNDS`、profile 配置（来自 `{CONTEXT_DIR}/scan_profile.json` 或 Orchestrator 显式传入）
+
+如果没有收到完整的 profile 配置，先读取 `{CONTEXT_DIR}/scan_profile.json`；不要自行查找 `{PROJECT_ROOT}/.opencode/scan-profiles.json`。
 
 从上下文目录读取：
 1. **`{CONTEXT_DIR}/project_model.json`** → 模块列表、文件分组、入口点
