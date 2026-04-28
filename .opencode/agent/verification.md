@@ -92,7 +92,7 @@ verification (协调者 - 你)
 1. **`vuln-db query phase=candidate`** → 所有候选漏洞（含 DataFlowScanner 和 SecurityAuditor 的发现）
 
 从上下文目录读取：
-1. **`{CONTEXT_DIR}/call_graph.json`** → 用于验证跨文件调用链
+1. **`{CONTEXT_DIR}/call_graph.json`** → 用于验证风险相关调用链、数据流路径和跨模块边界
 2. **`{CONTEXT_DIR}/project_model.json`** → 项目上下文信息（模块列表）
 
 ## 执行流程
@@ -155,7 +155,7 @@ vuln-db command=stats db_path={DB_PATH} phase=verified
 - 漏洞 ID 列表: [VULN-DF-CPP-MEMCPY-IPC-001, VULN-DF-PY-SQLI-SEARCH-001, VULN-SEC-JAVA-CONFIG-HTTPCLIENT-001, ...]
 
 ## 调用图子集
-[从 call_graph.json 提取该模块内的函数调用关系]
+[从 call_graph.json 提取该批次相关的 nodes/edges/data_flows/unresolved 子集。验证 worker 必须把其中的 `confidence` 和 `analysis_backend` 视为提示，不得替代源码验证。]
 
 ## 评分规则
 [如果存在 scoring_rules.json，传递其内容；否则说明使用默认规则]
@@ -187,9 +187,10 @@ vuln-db command=query db_path={DB_PATH} phase=candidate
 
 从结果中过滤 `cross_module=true` 的条目，进行专项验证：
 
-1. 使用 `call_graph.json` 验证跨模块调用链的完整性
+1. 使用 `call_graph.json.edges[]` 和 `data_flows[]` 初筛跨模块调用链的完整性
 2. 确认数据在模块边界的传递方式
 3. 检查跨模块路径中的安全措施
+4. 对 `confidence != "high"` 或 `analysis_backend == "model_inference"` 的边，必须回到源码/LSP/grep 二次确认；无法确认则降级为 `POSSIBLE` 或 `FALSE_POSITIVE`
 
 验证结果通过 `vuln-db batch-update` 写回数据库。
 

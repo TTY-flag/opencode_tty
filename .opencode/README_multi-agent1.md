@@ -105,8 +105,8 @@ flowchart TD
 | 已确认漏洞汇总 | `{SCAN_OUTPUT}/report_confirmed.md` | CONFIRMED 漏洞索引、统计和修复建议 |
 | 待确认漏洞汇总 | `{SCAN_OUTPUT}/report_unconfirmed.md` | LIKELY/POSSIBLE 漏洞索引 |
 | 威胁分析报告 | `{SCAN_OUTPUT}/threat_analysis_report.md` | 项目架构、攻击面、信任边界、STRIDE 分析 |
-| 项目模型 | `{SCAN_OUTPUT}/.context/project_model.json` | 语言、模块、入口点、框架、信任边界 |
-| 调用图 | `{SCAN_OUTPUT}/.context/call_graph.json` | 跨文件调用关系和数据流上下文 |
+| 项目模型 | `{SCAN_OUTPUT}/.context/project_model.json` | 语言、模块、入口点、框架、信任边界、稳定 ID、证据和扫描范围 |
+| 调用图 | `{SCAN_OUTPUT}/.context/call_graph.json` | 风险相关稀疏调用图、数据流路径和未解析动态调用 |
 | 漏洞数据库 | `{SCAN_OUTPUT}/.context/scan.db` | 候选漏洞、验证结果、work item 队列、agent 日志 |
 | 扫描日志 | `{SCAN_OUTPUT}/.context/scan_log.json` | 各阶段状态、耗时、输出文件 |
 
@@ -240,8 +240,8 @@ Orchestrator 会自动执行完整流程：architecture → dataflow/security �
 
 ```mermaid
 flowchart LR
-  PM["project_model.json"] --> PLAN["scanner coordinator<br/>规划切片"]
-  CG["call_graph.json"] --> PLAN
+  PM["project_model.json<br/>模块/入口/稳定 ID"] --> PLAN["scanner coordinator<br/>规划切片"]
+  CG["call_graph.json<br/>risk-focused nodes/edges/flows"] --> PLAN
   PLAN --> ADD["vuln-db work-add"]
   ADD --> QUEUE["scan_work_items"]
   QUEUE --> CLAIM["vuln-db work-claim limit=1"]
@@ -266,6 +266,12 @@ flowchart LR
 ## 多语言分发规则
 
 Architecture agent 会识别模块语言，并把语言写入 `project_model.json`。Scanner coordinator 再按语言字段选择 worker。
+
+`project_model.json` 和 `call_graph.json` 是后续扫描的结构化上下文：
+
+- `project_model.json` 负责项目地图、扫描范围、模块/文件/入口点稳定 ID、证据和置信度。
+- `call_graph.json` 负责风险相关稀疏图，只覆盖入口点、高危 sink、跨模块边界和框架调度点。
+- Scanner 只能把调用图作为切片和验证线索；最终漏洞结论必须回源代码、LSP 或 grep 验证。
 
 | 语言 | 数据流 worker | 安全审计 worker | 规则来源 |
 | ---- | ------------- | --------------- | -------- |

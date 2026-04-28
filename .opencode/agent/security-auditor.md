@@ -105,7 +105,7 @@ security-auditor (协调者 - 你)
 
 从上下文目录读取：
 1. **`{CONTEXT_DIR}/project_model.json`** → 模块列表、文件分组、入口点
-2. **`{CONTEXT_DIR}/call_graph.json`** → 函数调用图（用于跨模块安全分析）
+2. **`{CONTEXT_DIR}/call_graph.json`** → 风险相关稀疏调用图（用于入口、安全 sink、跨模块安全逻辑分析）
 
 ## 执行流程
 
@@ -144,6 +144,14 @@ vuln-db command=work-requeue db_path={DB_PATH} agent_name=security-auditor
 
 如果没有任何 work item，则从 `project_model.json` + `call_graph.json` 生成队列。
 
+生成队列时必须优先使用稳定 ID：
+- 模块使用 `modules[].id`
+- 文件使用 `files[].id` / `files[].path`
+- 入口点使用 `entry_points[].id`
+- 调用图使用 `nodes[].id`、`edges[].from/to`、`data_flows[].path`
+
+`call_graph.json` 是 risk-focused 稀疏图，不代表完整调用图。它用于定位认证、授权、凭证、配置、反序列化、JNDI/TLS 等高价值切片，worker 仍必须回源代码、LSP 或 grep 验证安全逻辑。
+
 #### 切片类型
 
 | shard_type | 生成方式 | 用途 |
@@ -151,7 +159,7 @@ vuln-db command=work-requeue db_path={DB_PATH} agent_name=security-auditor
 | `entrypoint_slice` | 每个外部入口点 1 个任务，关注认证/授权/会话/网关安全 | 审查入口相关安全逻辑 |
 | `sink_slice` | 每类安全敏感 API 1 个任务，如 TLS/JWT/JNDI/反序列化 | 反向确认配置和调用上下文 |
 | `module_sweep` | 每个模块/语言至少 1 个兜底任务 | 硬编码凭证、危险配置、弱 TLS、调试模式 |
-| `cross_module_slice` | 凭证/权限状态跨模块传递后生成 | 验证跨模块安全逻辑 |
+| `cross_module_slice` | `edges[]` 或 worker 安全提示显示凭证/权限状态跨模块传递后生成 | 验证跨模块安全逻辑 |
 
 #### 切片大小约束
 
@@ -231,11 +239,12 @@ vuln-db command=work-claim db_path={DB_PATH} agent_name=security-auditor limit=1
 - ID: [work_item.id]
 - 类型: [entrypoint_slice / sink_slice / module_sweep / cross_module_slice]
 - 优先级: [priority]
+- module_id: [work_item.module_id]
 - focus: [work_item.focus]
-- entrypoint: [work_item.entrypoint]
+- entrypoint: [work_item.entrypoint，优先使用 entry_points[].id]
 - sink: [work_item.sink]
 - 文件列表: [work_item.files_json]
-- 上下文: [work_item.context_json]
+- 上下文: [work_item.context_json，包含 node_ids / edge_ids / data_flow_ids 时必须传递]
 
 ## 入口点（该模块相关）
 [从 project_model.json 的 entry_points 过滤出属于该模块的入口，含 trust_level 和 justification]
@@ -245,7 +254,7 @@ vuln-db command=work-claim db_path={DB_PATH} agent_name=security-auditor limit=1
 - 部署模型: [project_profile.deployment_model]
 
 ## 调用图子集
-[从 call_graph.json 提取该模块内的函数调用关系]
+[从 call_graph.json 提取该 work item 相关的 nodes/edges/data_flows/unresolved 子集：只包含入口点、安全 sink、跨模块边界和必要的上下游 1-2 层调用。必须保留 node/edge/data_flow 的 id、confidence、analysis_backend、evidence。]
 
 ## 审计要求
 1. 只审计当前 work item 规定的文件和 focus，不扩大到整个模块

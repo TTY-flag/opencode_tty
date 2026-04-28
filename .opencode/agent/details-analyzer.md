@@ -76,7 +76,7 @@ permission:
 - 漏洞 ID: {VULN_ID}
 
 ## 调用图子集
-[从 call_graph.json 提取该漏洞相关的函数调用关系]
+[从 call_graph.json 提取该漏洞相关的 nodes/edges/data_flows/unresolved 子集，保留 confidence、analysis_backend、evidence]
 ```
 
 ## 层级架构
@@ -96,7 +96,7 @@ details-analyzer (协调者 - 你)
 1. **查询已确认漏洞**: 调用 `vuln-db query status=CONFIRMED` 获取所有已确认漏洞
 2. **创建输出目录**: 确保 `{SCAN_OUTPUT}/details/` 目录存在
 3. **断点续扫检测**: 检查 `{SCAN_OUTPUT}/details/` 目录中已存在的报告文件，识别已完成的漏洞
-4. **读取调用图**: 读取 `{CONTEXT_DIR}/call_graph.json`，为每个漏洞提取相关的调用关系子集
+4. **读取调用图**: 读取 `{CONTEXT_DIR}/call_graph.json`，为每个漏洞提取相关的 nodes/edges/data_flows/unresolved 子集
 5. **逐个调度**: **仅为未完成的漏洞**调用 `@details-worker`，传递漏洞 ID 和路径上下文
 6. **误报回写**: worker 明确判定误报时，通过 `vuln-db update` 将该漏洞标记为 `FALSE_POSITIVE`
 7. **门控检查**: 重新查询剩余 CONFIRMED 漏洞，检查是否都有对应报告，若有未完成的继续调度
@@ -174,7 +174,7 @@ glob pattern="{SCAN_OUTPUT}/details/*.md"
 - 漏洞 ID: {VULN_ID}
 
 ## 调用图子集
-[该漏洞涉及的函数调用关系，从 call_graph.json 中提取]
+[该漏洞涉及的 nodes/edges/data_flows/unresolved，从 call_graph.json 中提取。对低置信边或 model_inference 边，details-worker 必须回源代码确认后再写入报告。]
 
 ## 入口点信息
 [从 project_model.json 中提取与该漏洞相关的入口点]

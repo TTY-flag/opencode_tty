@@ -23,8 +23,8 @@ permission:
 
 | 文件 | 路径 | 说明 |
 |------|------|------|
-| `project_model.json` | `{CONTEXT_DIR}/project_model.json` | 项目结构、模块列表、入口点 |
-| `call_graph.json` | `{CONTEXT_DIR}/call_graph.json` | 函数调用图、数据流路径 |
+| `project_model.json` | `{CONTEXT_DIR}/project_model.json` | 项目结构、模块列表、入口点、稳定 ID、证据和扫描范围 |
+| `call_graph.json` | `{CONTEXT_DIR}/call_graph.json` | 风险相关稀疏调用图、数据流路径、未解析动态调用 |
 | `threat_analysis_report.md` | `{SCAN_OUTPUT}/threat_analysis_report.md` | 威胁分析报告 |
 
 **必须使用文件写入工具（write file）将内容写入磁盘，仅在对话中输出 JSON 文本不算完成。**
@@ -60,6 +60,16 @@ permission:
 关于 LSP 使用方法、可用性检测、跨文件追踪策略的完整说明，参考 `@skill:cross-file-analysis`。
 
 **将 LSP 检测结果记录到 `project_model.json` 的 `lsp_available` 字段**，供后续 Agent 参考。
+
+## 结构化事实边界
+
+你的结构化输出必须区分“源码/配置证实的事实”和“基于命名/目录的推断”：
+
+- 已由源码、配置、文档或 LSP/Grep 证实的内容，写入对应对象的 `evidence`，并设置 `confidence: "high"` 或 `"medium"`。
+- 仅由模型推断的内容，必须设置 `confidence: "low"`，不得作为高风险入口或确定调用边使用。
+- 每个模块、文件、入口点、调用图节点和调用边都要有稳定 `id`，下游 work item 和漏洞数据库优先引用 ID。
+- `call_graph.json` 只记录风险相关稀疏图：外部入口、高危 sink、跨模块边界、框架调度点。不要尝试生成完整项目调用图。
+- 无法可靠解析的动态调用、依赖注入、反射、装饰器、Lua table dispatch 等，写入 `call_graph.json.unresolved[]`，不要强行补边。
 
 ## 接收输入
 
@@ -307,7 +317,7 @@ permission:
    - 在 .h 头文件中声明的函数
    - 被多个 .c 文件调用的函数
 
-2. **构建函数调用图**
+2. **构建风险相关调用图**
    - 追踪 caller → callee 关系
    - 特别关注处理外部输入的函数调用链
 
@@ -475,7 +485,15 @@ permission:
 
 ### 第一步：写入 `{CONTEXT_DIR}/project_model.json`
 
-包含 `project_name`、`scan_time`、`lsp_available`、`total_files`、`total_lines`、`project_profile`（项目类型、部署模型、信任边界）、`modules`、`files`、`entry_points`（含 `trust_level` 和 `justification`）、`attack_surfaces` 等字段。
+包含 `schema_version`、`project_name`、`source_root`、`scan_time`、`lsp_available`、`total_files`、`total_lines`、`scan_scope`、`project_profile`（项目类型、部署模型、信任边界）、`dependencies`、`build_systems`、`modules`、`files`、`entry_points`（含 `id`、`trust_level`、`justification`、`evidence`、`confidence`）、`attack_surfaces` 等字段。
+
+写入要求：
+- `schema_version` 固定为 `"1.0"`。
+- `source_root` 使用 Orchestrator 传入的 `{PROJECT_ROOT}`。
+- `modules[].id`、`files[].id`、`entry_points[].id` 必须稳定且唯一。
+- `files[].module_id` 优先引用 `modules[].id`，可同时保留 `module` 作为可读名称。
+- 所有高风险模块和入口点必须有 `evidence`；证据不足的入口点降为 `confidence: "low"` 或不写入。
+- `scan_scope.exclude` 必须包含明显第三方/生成目录，例如 `vendor`、`third_party`、`node_modules`、`.git`、构建输出目录。
 
 写入后调用 `validate-json` 工具校验：
 - PASS → 继续第二步
@@ -483,7 +501,14 @@ permission:
 
 ### 第二步：写入 `{CONTEXT_DIR}/call_graph.json`
 
-包含 `functions`（函数节点及调用关系）和 `data_flows`（数据流路径）字段。
+包含 `schema_version`、`scope`、`nodes`、`edges`、`data_flows`、`unresolved` 字段。
+
+写入要求：
+- `scope.mode` 固定为 `"risk_focused"`，允许 `scope.truncated=true`，但必须列出 `covered_modules` 和 `covered_entry_points`。
+- `nodes[].id` 必须稳定且唯一，`module_id` 和 `entry_point_id` 应引用 `project_model.json` 中的 ID。
+- `edges[].from/to` 必须引用已存在节点，必须包含 `callsite`、`edge_type`、`confidence`、`analysis_backend` 和 `evidence`。
+- `data_flows[].path` 必须引用已存在节点，且只记录从外部 source 到高危 sink 或跨模块边界的路径。
+- 不再输出旧格式 `functions` / `calls` / `called_by`。如无法解析调用关系，写入 `unresolved[]` 并说明后续跟进方法。
 
 写入后调用 `validate-json` 工具校验：
 - PASS → 继续第三步
@@ -510,8 +535,8 @@ permission:
 ```
 === Architecture 完成确认 ===
 ✅ 分析模式: [threat.md 约束模式 / 自主分析模式]
-✅ {CONTEXT_DIR}/project_model.json  已写入且校验通过（XX 个文件，XX 个模块，XX 个入口点）
-✅ {CONTEXT_DIR}/call_graph.json     已写入且校验通过（XX 个函数节点）
+✅ {CONTEXT_DIR}/project_model.json  已写入且校验通过（XX 个文件，XX 个模块，XX 个入口点，schema_version=1.0）
+✅ {CONTEXT_DIR}/call_graph.json     已写入且校验通过（XX 个节点，XX 条边，XX 条数据流，risk_focused）
 ✅ {SCAN_OUTPUT}/threat_analysis_report.md 已写入
 === 可以进入下一阶段 ===
 ```

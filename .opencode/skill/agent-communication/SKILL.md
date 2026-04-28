@@ -172,52 +172,86 @@ Work item JSON 示例：
 
 ```json
 {
+  "schema_version": "1.0",
   "project_name": "string",
+  "source_root": "/absolute/path/to/project",
   "scan_time": "ISO8601",
   "lsp_available": true,
   "total_files": 50,
   "total_lines": 25000,
+  "scan_scope": {
+    "include": ["src/**", "app/**"],
+    "exclude": ["vendor/**", "third_party/**", "node_modules/**"],
+    "ignored_dirs": ["vendor", "third_party", "node_modules", ".git"]
+  },
   "project_profile": {
-    "project_type": "network_service|cli_tool|library|kernel_module|embedded|gui_application|web_application|cli_tool_python|go_service|lua_openresty|java_web_application|multi_language",
+    "project_type": "network_service",
     "deployment_model": "描述项目的典型部署方式（如：Linux 服务器上的守护进程、用户本地执行的命令行工具等）",
     "trust_boundaries": [
       {
         "boundary": "信任边界名称（如 Network Interface）",
         "trusted_side": "可信一侧（如 Application logic）",
         "untrusted_side": "不可信一侧（如 Remote clients）",
-        "risk": "Critical|High|Medium|Low"
+        "risk": "Critical"
       }
     ]
   },
+  "dependencies": [
+    {
+      "name": "spring-web",
+      "version": "6.x",
+      "source": "pom.xml",
+      "evidence": "pom.xml:42"
+    }
+  ],
+  "build_systems": [
+    {
+      "type": "cmake",
+      "file": "CMakeLists.txt",
+      "confidence": "high"
+    }
+  ],
   "modules": [
     {
+      "id": "mod-network",
       "name": "模块名称",
       "path": "src/module",
-      "language": "c_cpp|python|go|lua|java|mixed",
+      "language": "c_cpp",
       "languages": ["c_cpp"],
       "frameworks": ["spring"],
-      "components": ["file1.cpp", "file2.cpp"]
+      "components": ["file1.cpp", "file2.cpp"],
+      "risk": "Critical",
+      "priority": 1,
+      "evidence": ["src/module/server.c:89 exposes TCP handler"],
+      "confidence": "high"
     }
   ],
   "files": [
     {
+      "id": "file-src-network-c",
       "path": "src/network.c",
-      "language": "c_cpp|python|go|lua|java",
-      "risk": "Critical|High|Medium|Low",
+      "language": "c_cpp",
+      "risk": "Critical",
+      "module_id": "mod-network",
       "module": "network",
       "lines": 450,
-      "priority": 1
+      "priority": 1,
+      "evidence": ["contains recv()/accept() entry handling"]
     }
   ],
   "entry_points": [
     {
+      "id": "ep-cpp-network-handle-request-001",
       "file": "src/server.c",
       "line": 89,
       "function": "handle_request",
-      "type": "network|file|env|cmdline|stdin|web_route|rpc|decorator|grpc|servlet|spring_controller|openresty_phase|kong_plugin|message",
-      "trust_level": "untrusted_network|untrusted_local|semi_trusted|trusted_admin|internal",
+      "module_id": "mod-network",
+      "type": "network",
+      "trust_level": "untrusted_network",
       "justification": "TCP 0.0.0.0:8080 上的公网接口，远程客户端可直接连接",
-      "description": "接收HTTP请求"
+      "description": "接收HTTP请求",
+      "evidence": ["src/server.c:89 calls recv() on accepted socket"],
+      "confidence": "high"
     }
   ],
   "attack_surfaces": ["Unix Domain Socket: /opt/app/app.sock", "动态库加载: dlopen()"]
@@ -232,36 +266,133 @@ Work item JSON 示例：
 | `project_profile.project_type`     | project_profile | 项目类型枚举：`network_service`、`cli_tool`、`library`、`kernel_module`、`embedded`、`gui_application`、`web_application`、`cli_tool_python`、`go_service`、`lua_openresty`、`java_web_application`、`multi_language` |
 | `project_profile.deployment_model` | project_profile | 项目的典型部署方式描述                                                                                                                                                                                                                      |
 | `project_profile.trust_boundaries` | project_profile | 系统信任边界列表，标注每条边界两侧的信任差异                                                                                                                                                                                                |
+| `schema_version`                   | 顶层            | JSON 契约版本。当前固定为 `1.0`，后续 schema 变更必须递增版本，避免下游按旧格式读取 |
+| `source_root`                      | 顶层            | 被扫描项目根目录，必须使用协调者传入的 `{PROJECT_ROOT}`，不要硬编码 |
+| `scan_scope`                       | 顶层            | 本次扫描纳入和排除的范围，用于解释为什么某些目录没有进入分析 |
+| `dependencies` / `build_systems`   | 顶层            | 依赖和构建系统线索，用于识别框架、入口、危险默认配置和语言运行时 |
+| `id`                               | modules/files/entry_points | 稳定 ID。后续 `call_graph.json`、work item、漏洞数据库应引用这些 ID，避免只靠自然语言模块名匹配 |
 | `language` (modules)               | modules[]       | 模块主语言类型：`c_cpp`、`python`、`go`、`lua`、`java`、`mixed`，由 Architecture Agent 分析后填写，决定后续调度哪个语言的 Scanner Worker |
 | `languages` (modules)              | modules[]       | 模块中实际包含的语言数组。单语言模块也建议填写，如 `["go"]`；混合模块必须填写多个值 |
 | `frameworks` (modules)             | modules[]       | 识别到的框架/运行时数组，如 `["gin"]`、`["openresty"]`、`["spring"]` |
 | `language` (files)                 | files[]         | 文件语言类型：`c_cpp`、`python`、`go`、`lua`、`java`，由文件扩展名决定 |
 | `trust_level`                      | entry_points[]  | 入口点信任等级，决定该入口是否值得重点扫描                                                                                                                                                                                                  |
 | `justification`                    | entry_points[]  | 入口点可达性理由，要求 AI 解释为什么此入口是真实攻击面                                                                                                                                                                                      |
+| `evidence`                         | modules/files/entry_points | 证据列表，必须引用具体文件、行号、配置或文档片段。没有证据的推断不得作为高置信事实 |
+| `confidence`                       | modules/entry_points/build_systems | `high` 表示源码或配置直接证实，`medium` 表示多条弱信号支持，`low` 表示仅由命名或目录结构推断 |
 
 ### call_graph.json
 
 ```json
 {
-  "functions": {
-    "function_name@file.c": {
-      "defined_at": 45,
-      "calls": ["callee@other.c"],
-      "called_by": ["caller@main.c"],
-      "receives_external_input": true,
-      "risk": "Critical|High|Medium|Low"
-    }
+  "schema_version": "1.0",
+  "scope": {
+    "mode": "risk_focused",
+    "covered_modules": ["mod-network"],
+    "covered_entry_points": ["ep-cpp-network-handle-request-001"],
+    "truncated": true,
+    "notes": "仅记录入口点、危险 sink、跨模块边界相关调用，不要求完整项目调用图"
   },
+  "nodes": [
+    {
+      "id": "fn-cpp-server-handle-request",
+      "language": "c_cpp",
+      "kind": "function",
+      "symbol": "handle_request",
+      "signature": "int handle_request(int fd)",
+      "file": "src/server.c",
+      "line": 89,
+      "module_id": "mod-network",
+      "entry_point_id": "ep-cpp-network-handle-request-001",
+      "receives_external_input": true,
+      "risk": "Critical",
+      "framework_role": "posix_socket_handler",
+      "evidence": ["src/server.c:89 function definition"]
+    },
+    {
+      "id": "fn-cpp-parser-parse-header",
+      "language": "c_cpp",
+      "kind": "function",
+      "symbol": "parse_header",
+      "signature": "int parse_header(char *buf, size_t len)",
+      "file": "src/parser.c",
+      "line": 80,
+      "module_id": "mod-network",
+      "receives_external_input": true,
+      "risk": "High",
+      "evidence": ["src/parser.c:80 function definition"]
+    },
+    {
+      "id": "fn-cpp-parser-copy-header",
+      "language": "c_cpp",
+      "kind": "function",
+      "symbol": "copy_header",
+      "signature": "void copy_header(char *dst, const char *src)",
+      "file": "src/parser.c",
+      "line": 118,
+      "module_id": "mod-network",
+      "receives_external_input": true,
+      "risk": "High",
+      "evidence": ["src/parser.c:120 copies header into fixed buffer"]
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-server-handle-request-to-parser-parse",
+      "from": "fn-cpp-server-handle-request",
+      "to": "fn-cpp-parser-parse-header",
+      "callsite": "src/server.c:112",
+      "edge_type": "direct",
+      "data": ["request_buffer"],
+      "confidence": "high",
+      "analysis_backend": "lsp",
+      "evidence": "parse_header(request_buffer, len)"
+    },
+    {
+      "id": "edge-parser-parse-to-copy-header",
+      "from": "fn-cpp-parser-parse-header",
+      "to": "fn-cpp-parser-copy-header",
+      "callsite": "src/parser.c:102",
+      "edge_type": "direct",
+      "data": ["header_value"],
+      "confidence": "high",
+      "analysis_backend": "lsp",
+      "evidence": "copy_header(dst, header_value)"
+    }
+  ],
   "data_flows": [
     {
-      "source": "recv@src/network.c:50",
-      "path": ["handle_request@src/server.c:60", "parse_header@src/request.c:85"],
-      "sink": "strcpy@src/request.c:120",
-      "sink_type": "memory_operation"
+      "id": "flow-network-request-to-strcpy-001",
+      "source_node": "fn-cpp-server-handle-request",
+      "source_kind": "network",
+      "sink_node": "fn-cpp-parser-copy-header",
+      "sink_kind": "memory_copy",
+      "path": ["fn-cpp-server-handle-request", "fn-cpp-parser-parse-header", "fn-cpp-parser-copy-header"],
+      "sanitizers": [],
+      "cross_module": false,
+      "confidence": "medium",
+      "evidence": ["src/server.c:112 passes request_buffer", "src/parser.c:120 copies into fixed buffer"]
+    }
+  ],
+  "unresolved": [
+    {
+      "symbol": "service.authenticate",
+      "file": "src/main/java/app/UserController.java",
+      "line": 51,
+      "reason": "Spring injection target ambiguous",
+      "suggested_followup": "grep for AuthService implementations"
     }
   ]
 }
 ```
+
+**call_graph.json 设计约束**：
+
+- `call_graph.json` 是**风险相关稀疏图**，不是全量调用图。优先覆盖外部入口、高危 sink、跨模块边界和框架调度点。
+- `nodes[].id` 必须稳定且唯一，`edges[].from/to`、`data_flows[].source_node/sink_node/path` 必须引用已存在节点。
+- `edges[]` 是主事实来源，不再使用 `functions` 中的 `calls/called_by` 双向冗余，避免不一致。
+- 每条边必须带 `edge_type`、`confidence`、`analysis_backend` 和可读证据。模型推断只能标记为 `model_inference` + `low/medium`，不得伪装为 LSP 事实。
+- 无法解析的动态调用、框架注入、反射、Lua table dispatch、Python decorator wrapper 等写入 `unresolved[]`，不要强行补成确定边。
+- 大项目允许 `scope.truncated=true`，但必须说明覆盖了哪些模块和入口，scanner 会继续按 work item 回源代码验证。
 
 ### 漏洞数据（数据库）
 

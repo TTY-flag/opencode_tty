@@ -295,15 +295,15 @@ options:
 - `{CONTEXT_DIR}/call_graph.json`
 - `{SCAN_OUTPUT}/threat_analysis_report.md`
 
-**门控**：确认 `project_model.json` 和 `call_graph.json` 均存在且非空，否则报错并停止。
+**门控**：确认 `project_model.json` 和 `call_graph.json` 均存在且非空，并且 `validate-json` 返回 PASS；否则报错并停止。语义校验必须覆盖 `schema_version`、稳定 ID、语言枚举、调用图节点/边引用关系。
 
 ### 阶段 3: 漏洞扫描
 
 **前置检查**：
 
 ```
-检查1: {CONTEXT_DIR}/project_model.json            存在且非空
-检查2: {CONTEXT_DIR}/call_graph.json               存在且非空
+检查1: {CONTEXT_DIR}/project_model.json            存在且非空，schema_version=1.0，稳定 ID/语言/入口点校验通过
+检查2: {CONTEXT_DIR}/call_graph.json               存在且非空，schema_version=1.0，nodes/edges/data_flows 引用校验通过
 检查3: {SCAN_OUTPUT}/threat_analysis_report.md     存在且非空
 ```
 

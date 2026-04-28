@@ -55,6 +55,7 @@ interface ProjectModel {
     }>
   }
   entry_points?: Array<{
+    id?: string
     file: string
     line?: number
     function: string
@@ -62,6 +63,8 @@ interface ProjectModel {
     trust_level?: string
     justification?: string
     description?: string
+    evidence?: string[]
+    confidence?: string
   }>
   attack_surfaces?: string[]
 }
@@ -346,11 +349,13 @@ function buildSingleReport(opts: {
   md.push(`## 2. 攻击面分析`)
   md.push("")
   if (projectModel.entry_points && projectModel.entry_points.length > 0) {
-    md.push(`| 入口点 | 类型 | 信任等级 | 可达性理由 | 说明 |`)
-    md.push(`|--------|------|----------|-----------|------|`)
+    md.push(`| 入口点 | 类型 | 信任等级 | 置信度 | 可达性理由 | 证据 |`)
+    md.push(`|--------|------|----------|--------|-----------|------|`)
     for (const ep of projectModel.entry_points) {
+      const evidence = Array.isArray(ep.evidence) && ep.evidence.length > 0 ? ep.evidence.slice(0, 2).join("; ") : ep.description ?? "-"
+      const label = ep.id ? `${ep.id}: ${ep.function}@${ep.file}` : `${ep.function}@${ep.file}`
       md.push(
-        `| \`${ep.function}@${ep.file}\` | ${ep.type} | ${ep.trust_level ?? "-"} | ${escapeMarkdown(ep.justification ?? "-")} | ${escapeMarkdown(ep.description ?? "-")} |`,
+        `| \`${label}\` | ${ep.type} | ${ep.trust_level ?? "-"} | ${ep.confidence ?? "-"} | ${escapeMarkdown(ep.justification ?? "-")} | ${escapeMarkdown(evidence)} |`,
       )
     }
   } else {

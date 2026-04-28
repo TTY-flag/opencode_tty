@@ -17,7 +17,7 @@ description: 跨文件代码分析方法论。当需要追踪函数调用、数�
 | 优先级 | 工具 | 使用场景 | 优势 |
 |--------|------|----------|------|
 | 1 | **LSP** | 查找函数定义和引用 | 准确处理宏、条件编译、模板 |
-| 2 | **Call Graph**（`call_graph.json`） | 已分析的调用关系 | 无需重复分析，速度快 |
+| 2 | **Call Graph**（`call_graph.json`） | 已分析的风险相关调用关系 | 可快速定位入口、sink、跨模块边界，但仍需回源代码验证 |
 | 3 | **Grep** | LSP 无响应时回退 | 通用但不精确 |
 
 ## LSP 可用性检测
@@ -33,6 +33,13 @@ description: 跨文件代码分析方法论。当需要追踪函数调用、数�
    - LSP 不可用 → 完全使用 grep 回退方案
 
 **将检测结果记录到 `project_model.json` 的 `lsp_available` 字段**，供后续 Agent 参考。
+
+`call_graph.json` 是 risk-focused 稀疏图，不是完整项目调用图。使用时遵守：
+
+- 读取 `nodes[]`、`edges[]`、`data_flows[]` 和 `unresolved[]`。
+- `edges[].analysis_backend` 为 `lsp` 或 `grep` 且 `confidence=high` 时，可作为强提示；仍建议读取调用点源码确认。
+- `analysis_backend=model_inference` 或 `confidence!=high` 的边，只能作为待验证线索，不能单独支撑漏洞结论。
+- 对 `unresolved[]` 中的动态调用、框架注入、反射、装饰器、Lua table dispatch 等，必须使用语言特定策略补查。
 
 > **Python 项目注意**：Python LSP（如 Pylance/Pyright）对动态类型的支持有限，`getattr()`、`**kwargs` 等动态特性可能无法正确解析。此时需配合 grep 回退。
 

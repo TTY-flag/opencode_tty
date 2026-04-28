@@ -99,7 +99,7 @@ dataflow-scanner (协调者 - 你)
 
 从上下文目录读取：
 1. **`{CONTEXT_DIR}/project_model.json`** → 模块列表、文件分组、入口点
-2. **`{CONTEXT_DIR}/call_graph.json`** → 函数调用图（用于跨模块分析）
+2. **`{CONTEXT_DIR}/call_graph.json`** → 风险相关稀疏调用图（用于入口、sink、跨模块边界分析）
 
 ## 执行流程
 
@@ -159,6 +159,14 @@ vuln-db command=work-requeue db_path={DB_PATH} agent_name=dataflow-scanner
 
 如果没有任何 work item，则从 `project_model.json` + `call_graph.json` 生成队列。
 
+生成队列时必须优先使用稳定 ID：
+- 模块使用 `modules[].id`
+- 文件使用 `files[].id` / `files[].path`
+- 入口点使用 `entry_points[].id`
+- 调用图使用 `nodes[].id`、`edges[].from/to`、`data_flows[].path`
+
+`call_graph.json` 是 risk-focused 稀疏图，不代表完整调用图。它用于定位高价值切片，worker 仍必须回源代码、LSP 或 grep 验证每条 source→sink 路径。
+
 #### 切片类型
 
 | shard_type | 生成方式 | 用途 |
@@ -166,7 +174,7 @@ vuln-db command=work-requeue db_path={DB_PATH} agent_name=dataflow-scanner
 | `entrypoint_slice` | 每个外部入口点 1 个任务，包含入口点上下游 1-2 层文件 | 从 source 正向追踪到 sink |
 | `sink_slice` | 每类高危 sink 1 个任务，包含 sink 所在文件和调用方 | 从危险操作反向找 source |
 | `module_sweep` | 每个模块/语言至少 1 个兜底任务 | 发现遗漏的明显危险 API |
-| `cross_module_slice` | 跨模块 [OUT]/[IN] 匹配后生成 | 验证跨模块数据流 |
+| `cross_module_slice` | `edges[]` 或 worker [OUT]/[IN] 显示跨模块传递后生成 | 验证跨模块数据流 |
 
 #### 切片大小约束
 
@@ -246,11 +254,12 @@ vuln-db command=work-claim db_path={DB_PATH} agent_name=dataflow-scanner limit=1
 - ID: [work_item.id]
 - 类型: [entrypoint_slice / sink_slice / module_sweep / cross_module_slice]
 - 优先级: [priority]
+- module_id: [work_item.module_id]
 - focus: [work_item.focus]
-- entrypoint: [work_item.entrypoint]
+- entrypoint: [work_item.entrypoint，优先使用 entry_points[].id]
 - sink: [work_item.sink]
 - 文件列表: [work_item.files_json]
-- 上下文: [work_item.context_json]
+- 上下文: [work_item.context_json，包含 node_ids / edge_ids / data_flow_ids 时必须传递]
 
 ## 入口点（该模块相关）
 [从 project_model.json 的 entry_points 过滤出属于该模块的入口，含 trust_level 和 justification]
@@ -260,7 +269,7 @@ vuln-db command=work-claim db_path={DB_PATH} agent_name=dataflow-scanner limit=1
 - 部署模型: [project_profile.deployment_model]
 
 ## 调用图子集
-[从 call_graph.json 提取该模块内的函数调用关系]
+[从 call_graph.json 提取该 work item 相关的 nodes/edges/data_flows/unresolved 子集：只包含入口点、sink、跨模块边界和必要的上下游 1-2 层调用。必须保留 node/edge/data_flow 的 id、confidence、analysis_backend、evidence。]
 
 ## 扫描要求
 1. 只扫描当前 work item 规定的文件和 focus，不扩大到整个模块
@@ -298,7 +307,7 @@ vuln-db command=work-fail db_path={DB_PATH} id={WORK_ITEM_ID} message="[失败�
 
 1. **收集所有 [OUT]/[IN] 标记**：从各子 Agent 返回文本和恢复的中间文件中提取跨模块数据流提示
 2. **匹配流出/流入对**：按函数名和参数类型匹配模块 A 的 `[OUT]` → 模块 B 的 `[IN]`
-3. **验证调用链**：使用 `call_graph.json` 确认跨模块调用关系存在（函数定义 + 调用点均存在）
+3. **验证调用链**：使用 `call_graph.json.edges[]` 初筛跨模块调用关系，再回源代码确认函数定义和调用点均存在
 4. **追踪数据变换**：读取边界函数源码，检查参数在模块边界是否被清洗、截断或类型转换
 5. **构造跨模块漏洞**：将 Source（模块 A）→ Sink（模块 B）的完整路径记录为漏洞条目
 
