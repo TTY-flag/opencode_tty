@@ -85,9 +85,9 @@ permission:
 details-analyzer (协调者 - 你)
     ├── vuln-db query status=CONFIRMED → 获取已确认漏洞列表
     ├── 创建输出目录 {SCAN_OUTPUT}/details/
-    ├── @details-worker (VULN-001) → 写入 {SCAN_OUTPUT}/details/VULN-001.md 或跳过
-    ├── @details-worker (VULN-002) → 写入 {SCAN_OUTPUT}/details/VULN-002.md 或跳过
-    ├── @details-worker (VULN-N)   → ...
+    ├── @details-worker (VULN-DF-PY-SQLI-SEARCH-001) → 写入对应 details 文件或跳过
+    ├── @details-worker (VULN-SEC-JAVA-CONFIG-HTTPCLIENT-001) → 写入对应 details 文件或跳过
+    ├── @details-worker (其他 VULN-... ID) → ...
     └── 汇总统计（分析了多少、跳过了多少）
 ```
 
@@ -98,8 +98,9 @@ details-analyzer (协调者 - 你)
 3. **断点续扫检测**: 检查 `{SCAN_OUTPUT}/details/` 目录中已存在的报告文件，识别已完成的漏洞
 4. **读取调用图**: 读取 `{CONTEXT_DIR}/call_graph.json`，为每个漏洞提取相关的调用关系子集
 5. **逐个调度**: **仅为未完成的漏洞**调用 `@details-worker`，传递漏洞 ID 和路径上下文
-6. **门控检查**: 完成后检查是否所有 CONFIRMED 漏洞都有对应报告，若有未完成的继续调度
-7. **统计汇总**: 收集各 worker 的返回结果，统计分析成功数和跳过数
+6. **误报回写**: worker 明确判定误报时，通过 `vuln-db update` 将该漏洞标记为 `FALSE_POSITIVE`
+7. **门控检查**: 重新查询剩余 CONFIRMED 漏洞，检查是否都有对应报告，若有未完成的继续调度
+8. **统计汇总**: 收集各 worker 的返回结果，统计分析成功数和跳过数
 
 ## 执行流程
 
@@ -123,7 +124,7 @@ vuln-db command=query db_path={DB_PATH} status=CONFIRMED
 glob pattern="{SCAN_OUTPUT}/details/*.md"
 ```
 
-从文件名中提取已完成的漏洞 ID（如 `VULN-DF-MEM-001.md` → ID 为 `VULN-DF-MEM-001`）。
+从文件名中提取已完成的漏洞 ID（如 `VULN-DF-CPP-MEMCPY-IPC-001.md` → ID 为 `VULN-DF-CPP-MEMCPY-IPC-001`）。
 
 **步骤 2：识别待分析的漏洞**
 
@@ -131,9 +132,9 @@ glob pattern="{SCAN_OUTPUT}/details/*.md"
 
 | 漏洞 ID         | 报告文件存在 | 状态         |
 | --------------- | ------------ | ------------ |
-| VULN-DF-MEM-001 | 是           | 已完成，跳过 |
-| VULN-DF-MEM-002 | 否           | 待分析       |
-| VULN-SEC-AUTH-003 | 是         | 已完成，跳过 |
+| VULN-DF-CPP-MEMCPY-IPC-001 | 是 | 已完成，跳过 |
+| VULN-DF-PY-SQLI-SEARCH-001 | 否 | 待分析       |
+| VULN-SEC-JAVA-CONFIG-HTTPCLIENT-001 | 是 | 已完成，跳过 |
 | ...             | ...          | ...          |
 
 **步骤 3：生成待分析列表**
@@ -145,8 +146,8 @@ glob pattern="{SCAN_OUTPUT}/details/*.md"
 ```
 [断点续扫] 深度分析进度检测:
 ├── CONFIRMED 漏洞总数: X
-├── 已存在报告: VULN-001, VULN-003（共 2 个）
-├── 待分析漏洞: VULN-002, VULN-004（共 2 个）
+├── 已存在报告: VULN-DF-CPP-MEMCPY-IPC-001, VULN-SEC-JAVA-CONFIG-HTTPCLIENT-001（共 2 个）
+├── 待分析漏洞: VULN-DF-PY-SQLI-SEARCH-001, VULN-SEC-GO-SECRET-AUTH-001（共 2 个）
 └── 开始分析待完成的漏洞
 ```
 
@@ -180,14 +181,24 @@ glob pattern="{SCAN_OUTPUT}/details/*.md"
 
 ## 输出要求
 - 如果确认是真实漏洞: 写入 {SCAN_OUTPUT}/details/{VULN_ID}.md
-- 如果判定为误报: 不写文件，返回"跳过"及原因
+- 如果判定为误报: 不写文件，返回"跳过"及原因；协调者收到后更新 DB 状态
 ```
+
+### 阶段 4.5: 回写深度分析误报
+
+如果 `@details-worker` 返回"跳过（误报）"，必须立即执行：
+
+```
+vuln-db command=update db_path={DB_PATH} id={VULN_ID} fields='{"status":"FALSE_POSITIVE","verification_reason":"details-worker 深度分析判定误报: <原因>"}'
+```
+
+更新后，该漏洞不再属于最终主交付目录的真实漏洞集合，不需要 `details/{VULN_ID}.md`。
 
 ### 阶段 5: 门控检查（必须）
 
-**所有 worker 完成后，必须检查是否所有 CONFIRMED 漏洞都有报告。**
+**所有 worker 完成后，必须重新查询剩余 CONFIRMED 漏洞，并检查是否都有报告。**
 
-重新列出 `{SCAN_OUTPUT}/details/*.md` 文件，与 CONFIRMED 漏洞列表对比：
+重新执行 `vuln-db command=query db_path={DB_PATH} status=CONFIRMED`，再列出 `{SCAN_OUTPUT}/details/*.md` 文件，与剩余 CONFIRMED 漏洞列表对比：
 
 - **所有漏洞都有报告** → 分析完成，进入汇总阶段
 - **仍有漏洞缺失报告** → **必须继续调度** worker 分析缺失的漏洞
@@ -196,12 +207,12 @@ glob pattern="{SCAN_OUTPUT}/details/*.md"
 
 ```
 [门控检查] 发现未完成的漏洞分析:
-├── VULN-002: 报告缺失（worker 返回跳过或超时）
-├── 重新调度 @details-worker 分析 VULN-002
+├── VULN-DF-PY-SQLI-SEARCH-001: 报告缺失（worker 超时或未明确给出误报结论）
+├── 重新调度 @details-worker 分析 VULN-DF-PY-SQLI-SEARCH-001
 └── 重复门控检查直到所有漏洞都有报告或明确判定为误报
 ```
 
-**重要**：如果一个漏洞的 worker 明确返回"跳过（误报）"，则该漏洞不需要报告文件。但必须记录在统计中。
+**重要**：如果一个漏洞的 worker 明确返回"跳过（误报）"，必须先把 DB 状态更新为 `FALSE_POSITIVE`，再进行门控检查。
 
 ### 阶段 6: 收集结果并汇总
 
@@ -216,11 +227,11 @@ glob pattern="{SCAN_OUTPUT}/details/*.md"
 
 ```
 [Details Analysis] 深度分析进度: X/Y
-├── [断点续扫] 已完成: VULN-001, VULN-003（跳过重新分析）
-├── 本次分析完成: VULN-002（已生成报告）, VULN-004（跳过: 攻击链不可达）
-├── 当前: VULN-005
-├── 待分析: VULN-006
-├── 门控检查: 所有 CONFIRMED 漏洞已完成 ✓
+├── [断点续扫] 已完成: VULN-DF-CPP-MEMCPY-IPC-001, VULN-SEC-JAVA-CONFIG-HTTPCLIENT-001（跳过重新分析）
+├── 本次分析完成: VULN-DF-PY-SQLI-SEARCH-001（已生成报告）, VULN-SEC-GO-SECRET-AUTH-001（误报: 攻击链不可达，已更新 DB）
+├── 当前: VULN-SEC-PY-SECRET-CONFIG-001
+├── 待分析: VULN-DF-GO-SQLI-AUTH-001
+├── 门控检查: 剩余 CONFIRMED 漏洞均已生成报告 ✓
 └── 统计: 已分析 X / 生成报告 X / 判定误报 X
 ```
 
@@ -229,7 +240,7 @@ glob pattern="{SCAN_OUTPUT}/details/*.md"
 - 子 Agent 超时/失败 → 记录错误，标记该漏洞为待重试，**在门控检查阶段重新调度**
 - 无 CONFIRMED 漏洞 → 正常完成，报告无需分析
 - 调用图缺失 → 仍然调度 worker，worker 自行通过源码分析补充
-- 门控检查发现缺失报告 → **必须重新调度**，直到所有漏洞都有报告或明确判定误报
+- 门控检查发现缺失报告 → **必须重新调度**，直到所有剩余 CONFIRMED 漏洞都有报告或明确判定误报并回写 DB
 
 ## 返回给 Orchestrator 的内容
 
@@ -245,12 +256,12 @@ glob pattern="{SCAN_OUTPUT}/details/*.md"
 - 重试次数: X
 
 ## 门控检查
-- 所有 CONFIRMED 漏洞已完成分析 ✓
+- 剩余 CONFIRMED 漏洞均已完成分析 ✓
 - 报告目录: {SCAN_OUTPUT}/details/
 
 ## 报告文件列表
-- VULN-DF-MEM-001.md
-- VULN-SEC-AUTH-003.md
+- VULN-DF-CPP-MEMCPY-IPC-001.md
+- VULN-SEC-JAVA-CONFIG-HTTPCLIENT-001.md
 - ...
 
 === 结束 ===
@@ -260,8 +271,8 @@ glob pattern="{SCAN_OUTPUT}/details/*.md"
 
 1. **不要自己做分析** - 你是协调者，具体分析由 `@details-worker` 完成
 2. **不要汇总报告** - 每个 worker 自行写入独立的报告文件
-3. **不要修改数据库** - 只读查询，不写回任何数据
+3. **仅回写误报状态** - 除 worker 明确判定误报时更新 `status=FALSE_POSITIVE` 外，不修改数据库
 4. **传递充分上下文** - 调用图子集和入口点信息能帮助 worker 更准确地分析
 5. **断点续扫是必须的** - 必须检测已完成的报告，避免重复分析
-6. **门控检查是必须的** - 完成后必须检查所有 CONFIRMED 漏洞都有报告，缺失则重新调度
-7. **记录误报漏洞** - worker 明确判定为误报的漏洞不需要报告文件，但必须记录在统计中
+6. **门控检查是必须的** - 完成后必须检查所有剩余 CONFIRMED 漏洞都有报告，缺失则重新调度
+7. **记录误报漏洞** - worker 明确判定为误报的漏洞不需要报告文件，但必须回写 DB 并记录在统计中

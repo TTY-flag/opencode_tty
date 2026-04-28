@@ -1,4 +1,4 @@
-SQLite-based vulnerability database for the multi-agent C/C++ vulnerability scanner.
+SQLite-based vulnerability database for the multi-agent C/C++/Python/Go/Lua/Java vulnerability scanner.
 
 Replaces the previous JSON file-based intermediate storage (candidates_df_*.json, candidates_sec_*.json, verified_*.json) with a single SQLite database file (scan.db).
 
@@ -10,11 +10,13 @@ Commands:
 2. insert - Batch insert candidate vulnerabilities from a scanner.
    Required: db_path, vulnerabilities (JSON array string of vulnerability objects)
    Each object must have: id, source_agent, source_module
-   Optional fields: type, cwe, severity, description, file, line_start, line_end, function_name, code_snippet, data_flow, pre_validated, cross_module, modules_involved
+   Optional fields: language, framework, analysis_kind, type, cwe, severity, description, file, line_start, line_end, function_name, code_snippet, data_flow, source_kind, sink_kind, sanitizer_checked, evidence_json, rule_id, analysis_backend, pre_validated, cross_module, modules_involved
+   id must match: VULN-{DF|SEC}-{CPP|PY|GO|LUA|JAVA|MIX}-{KIND}-{MODULE}-{NNN}
+   Examples: VULN-DF-CPP-MEMCPY-IPC-001, VULN-DF-PY-SQLI-SEARCH-001, VULN-SEC-JAVA-CONFIG-HTTPCLIENT-001
 
 3. query - Query vulnerabilities with filters. Returns JSON array of matching rows.
    Required: db_path
-   Optional: phase, status, source_module, source_agent, min_confidence, exclude_status, limit, offset, ids (comma-separated IDs)
+   Optional: phase, status, source_module, source_agent, language, analysis_kind, min_confidence, exclude_status, limit, offset, ids (comma-separated IDs)
 
 4. update - Update a single vulnerability's fields (e.g. verification results).
    Required: db_path, id, fields (JSON object string with fields to update)
@@ -30,7 +32,7 @@ Commands:
 7. stats - Get aggregated statistics.
    Required: db_path
    Optional: phase (filter by phase)
-   Returns counts by status, severity, module, and totals.
+   Returns counts by status, severity, module, language, analysis kind, and totals.
 
 8. log - Record an agent execution event.
    Required: db_path, agent_name
@@ -39,6 +41,35 @@ Commands:
 9. export-json - Export query results to a JSON file (for debugging/compatibility).
    Required: db_path, output
    Optional: phase, status, source_module, min_confidence, exclude_status
+
+10. work-add - Add scan work items for large-project sharded scanning.
+    Required: db_path, work_items (JSON array string)
+    Each item should include: id, agent_name, shard_type, language, source_module, files, priority
+
+11. work-query - Query scan work items.
+    Required: db_path
+    Optional: status, agent_name, source_module, language, shard_type, limit
+
+12. work-claim - Claim pending work items in priority order.
+    Required: db_path
+    Optional: agent_name, language, limit
+    Marks returned items as running and increments attempts.
+
+13. work-complete - Mark one work item as success.
+    Required: db_path, id
+    Optional: finding_count or item_count
+
+14. work-fail - Mark one work item as failed.
+    Required: db_path, id
+    Optional: message
+
+15. work-requeue - Move running/failed work items back to pending for resume.
+    Required: db_path
+    Optional: id, agent_name
+
+16. work-stats - Get work item status counts.
+    Required: db_path
+    Optional: agent_name
 
 Parameters:
 - db_path: Absolute path to the SQLite database file (e.g. {CONTEXT_DIR}/scan.db)
@@ -51,6 +82,8 @@ Parameters:
 - status: Filter by status (CONFIRMED/LIKELY/POSSIBLE/FALSE_POSITIVE)
 - source_module: Filter by module name
 - source_agent: Filter by source agent
+- language: Filter by language (c_cpp/python/go/lua/java)
+- analysis_kind: Filter by analysis kind (dataflow/authn/authz/crypto/config/secret/framework_misuse)
 - min_confidence: Minimum confidence score filter
 - exclude_status: Exclude vulnerabilities with this status
 - limit: Max number of results to return
@@ -61,3 +94,6 @@ Parameters:
 - message: Log message
 - item_count: Number of items processed (for log)
 - output: Output file path for export-json
+- work_items: JSON array of scan work items for work-add
+- shard_type: Work item shard type (entrypoint_slice/sink_slice/module_sweep/expansion_slice/cross_module_slice)
+- finding_count: Number of findings produced by a completed work item

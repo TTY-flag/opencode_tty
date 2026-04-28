@@ -1,6 +1,6 @@
 ---
 name: cross-file-analysis
-description: 跨文件代码分析方法论。当需要追踪函数调用、数据流或符号在多个文件间的传递时使用此 Skill。定义了 LSP/Call Graph/Grep 三层工具优先级和使用方法。支持 C/C++ 和 Python。
+description: 跨文件代码分析方法论。当需要追踪函数调用、数据流或符号在多个文件间的传递时使用此 Skill。定义了 LSP/Call Graph/Grep 三层工具优先级和使用方法。支持 C/C++、Python、Go、Lua、Java。
 ---
 
 ## Use this when
@@ -24,7 +24,7 @@ description: 跨文件代码分析方法论。当需要追踪函数调用、数�
 
 在开始分析前，**必须先检测 LSP 是否正常工作**：
 
-1. **测试方法**：对项目中任意源文件（`.c`/`.cpp` 或 `.py`）中的函数调用使用 `Go to Definition`
+1. **测试方法**：对项目中任意源文件（`.c`/`.cpp`、`.py`、`.go`、`.lua`、`.java`）中的函数调用使用 `Go to Definition`
 2. **判断标准**：
    - LSP 可用：成功跳转到函数定义位置
    - LSP 不可用：无响应、超时、或返回错误
@@ -35,6 +35,12 @@ description: 跨文件代码分析方法论。当需要追踪函数调用、数�
 **将检测结果记录到 `project_model.json` 的 `lsp_available` 字段**，供后续 Agent 参考。
 
 > **Python 项目注意**：Python LSP（如 Pylance/Pyright）对动态类型的支持有限，`getattr()`、`**kwargs` 等动态特性可能无法正确解析。此时需配合 grep 回退。
+
+> **Go 项目注意**：优先利用 package 边界、导出函数、interface 实现和 `go.mod`。handler → service → repository 是常见路径。
+
+> **Lua 项目注意**：Lua LSP 对动态 table、`require()` 和宿主回调支持有限。OpenResty/Kong 项目要追踪 `ngx.ctx`、`kong.ctx`、模块返回表和闭包 upvalue。
+
+> **Java 项目注意**：优先追踪 Controller/Servlet/JAX-RS resource → Service → DAO/client。Spring 注入、接口实现和注解路由需要结合 grep/LSP 双重确认。
 
 ## LSP 操作指南
 

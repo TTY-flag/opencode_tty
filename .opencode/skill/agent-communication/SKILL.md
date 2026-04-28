@@ -1,6 +1,6 @@
 ---
 name: agent-communication
-description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定义、数据库交互协议。所有参与漏洞扫描的 Agent 都应参考此 Skill。支持 C/C++ 和 Python 混合项目。
+description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定义、数据库交互协议。所有参与漏洞扫描的 Agent 都应参考此 Skill。支持 C/C++、Python、Go、Lua、Java 混合项目。
 ---
 
 ## Use this when
@@ -57,9 +57,14 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 
 | 资源               | 写入者                            | 读取者     | 用途                             |
 | ------------------ | --------------------------------- | ---------- | -------------------------------- |
-| `scan.db` (SQLite) | 所有 Agent（通过 `vuln-db` 工具） | 所有 Agent | 候选漏洞 + 验证结果 + Agent 日志 |
+| `scan.db` (SQLite) | 所有 Agent（通过 `vuln-db` 工具） | 所有 Agent | 候选漏洞 + 验证结果 + Work Item 队列 + Agent 日志 |
 
 漏洞数据的 Schema 和 `vuln-db` 工具的使用方式，参考 `@skill:vulnerability-db`。
+
+Scanner 写入候选漏洞时必须设置 `analysis_kind`：
+
+- `dataflow-scanner`: 固定写入 `analysis_kind: "dataflow"`
+- `security-auditor`: 写入 `authn`、`authz`、`session`、`secret`、`crypto`、`config`、`framework_misuse` 等语义安全类别
 
 ### JSON 文件（项目模型和日志）
 
@@ -69,6 +74,7 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 | `call_graph.json`    | @architecture | 所有 Scanner、@verification、@details-analyzer            | 函数调用关系图           |
 | `scan_log.json`      | @orchestrator | 用户/调试                                                 | Agent 调用日志和扫描统计 |
 | `scoring_rules.json` | 用户（可选）  | @verification、@verification-worker                       | 自定义置信度评分规则     |
+| `.opencode/language/*.json` | 项目配置 | @architecture、@dataflow-scanner、@security-auditor、语言 worker | 语言扩展名、框架、Source/Sink/Sanitizer 规则 |
 
 ### 约束文件
 
@@ -80,9 +86,51 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 
 | 文件                        | 写入者                                           | 用途                             |
 | --------------------------- | ------------------------------------------------ | -------------------------------- |
-| `report.md`                 | @reporter（通过 `report-generator` 工具 + 补充） | 最终漏洞报告                     |
+| `report_confirmed.md`       | @reporter（通过 `report-generator` 工具 + 补充） | 已确认漏洞汇总索引               |
+| `report_unconfirmed.md`     | @reporter（通过 `report-generator` 工具生成）    | 待确认漏洞汇总索引               |
 | `threat_analysis_report.md` | @architecture                                    | 威胁分析报告                     |
-| `details/{VULN_ID}.md`      | @details-worker                                  | 单个已确认漏洞的深度利用分析报告 |
+| `details/{VULN_ID}.md`      | @details-worker                                  | 最终主交付：单个已确认漏洞的深度利用分析报告 |
+
+### Work Item 队列
+
+大项目扫描不得直接把整个模块塞给一个 worker。Scanner Coordinator 必须先生成小颗粒度 work item，并通过 `vuln-db work-add` 写入 `scan_work_items`。
+
+单个 work item 建议约束：
+
+- `max_files`: 5-10 个文件
+- `max_lines`: 约 2500 行
+- `focus`: 不超过 3 类 sink 或安全主题
+- `entrypoint_slice`: 只围绕一个入口点
+- `sink_slice`: 只围绕一类或一个关键 sink
+- `module_sweep`: 用于硬编码凭证、危险配置、明显危险 API 的兜底扫
+
+Work item JSON 示例：
+
+```json
+{
+  "id": "df-go-auth-entry-001",
+  "scan_id": "scan-001",
+  "agent_name": "dataflow-scanner",
+  "shard_type": "entrypoint_slice",
+  "language": "go",
+  "framework": "gin",
+  "source_module": "auth",
+  "focus": ["sql_execution", "command_execution"],
+  "entrypoint": "LoginHandler@internal/auth/handler.go:31",
+  "sink": null,
+  "files": [
+    "internal/auth/handler.go",
+    "internal/auth/service.go",
+    "internal/auth/repo.go"
+  ],
+  "context": {
+    "max_files": 8,
+    "max_lines": 2500,
+    "reason": "外部 HTTP 入口到数据库 sink 的高风险路径"
+  },
+  "priority": 95
+}
+```
 
 ## JSON 格式规范（必须遵守）
 
@@ -130,7 +178,7 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
   "total_files": 50,
   "total_lines": 25000,
   "project_profile": {
-    "project_type": "network_service|cli_tool|library|kernel_module|embedded|gui_application|web_application|cli_tool_python",
+    "project_type": "network_service|cli_tool|library|kernel_module|embedded|gui_application|web_application|cli_tool_python|go_service|lua_openresty|java_web_application|multi_language",
     "deployment_model": "描述项目的典型部署方式（如：Linux 服务器上的守护进程、用户本地执行的命令行工具等）",
     "trust_boundaries": [
       {
@@ -145,14 +193,16 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
     {
       "name": "模块名称",
       "path": "src/module",
-      "language": "c_cpp|python|mixed",
+      "language": "c_cpp|python|go|lua|java|mixed",
+      "languages": ["c_cpp"],
+      "frameworks": ["spring"],
       "components": ["file1.cpp", "file2.cpp"]
     }
   ],
   "files": [
     {
       "path": "src/network.c",
-      "language": "c_cpp|python",
+      "language": "c_cpp|python|go|lua|java",
       "risk": "Critical|High|Medium|Low",
       "module": "network",
       "lines": 450,
@@ -164,7 +214,7 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
       "file": "src/server.c",
       "line": 89,
       "function": "handle_request",
-      "type": "network|file|env|cmdline|stdin|web_route|rpc|decorator",
+      "type": "network|file|env|cmdline|stdin|web_route|rpc|decorator|grpc|servlet|spring_controller|openresty_phase|kong_plugin|message",
       "trust_level": "untrusted_network|untrusted_local|semi_trusted|trusted_admin|internal",
       "justification": "TCP 0.0.0.0:8080 上的公网接口，远程客户端可直接连接",
       "description": "接收HTTP请求"
@@ -179,11 +229,13 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 | 字段                               | 所属            | 说明                                                                                                                                                                                                                                        |
 | ---------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `project_profile`                  | 顶层            | 项目定位信息，由 Architecture Agent 在攻击面识别前填写                                                                                                                                                                                      |
-| `project_profile.project_type`     | project_profile | 项目类型枚举：`network_service`（网络服务）、`cli_tool`（CLI 工具）、`library`（库）、`kernel_module`（内核模块）、`embedded`（嵌入式）、`gui_application`（GUI 应用）、`web_application`（Web 应用）、`cli_tool_python`（Python CLI 工具） |
+| `project_profile.project_type`     | project_profile | 项目类型枚举：`network_service`、`cli_tool`、`library`、`kernel_module`、`embedded`、`gui_application`、`web_application`、`cli_tool_python`、`go_service`、`lua_openresty`、`java_web_application`、`multi_language` |
 | `project_profile.deployment_model` | project_profile | 项目的典型部署方式描述                                                                                                                                                                                                                      |
 | `project_profile.trust_boundaries` | project_profile | 系统信任边界列表，标注每条边界两侧的信任差异                                                                                                                                                                                                |
-| `language` (modules)               | modules[]       | 模块语言类型：`c_cpp`（C/C++）、`python`（Python）、`mixed`（混合），由 Architecture Agent 分析后填写，决定后续调度哪个语言的 Scanner Worker                                                                                                |
-| `language` (files)                 | files[]         | 文件语言类型：`c_cpp`（C/C++ 源文件）、`python`（Python 源文件），由文件扩展名决定                                                                                                                                                          |
+| `language` (modules)               | modules[]       | 模块主语言类型：`c_cpp`、`python`、`go`、`lua`、`java`、`mixed`，由 Architecture Agent 分析后填写，决定后续调度哪个语言的 Scanner Worker |
+| `languages` (modules)              | modules[]       | 模块中实际包含的语言数组。单语言模块也建议填写，如 `["go"]`；混合模块必须填写多个值 |
+| `frameworks` (modules)             | modules[]       | 识别到的框架/运行时数组，如 `["gin"]`、`["openresty"]`、`["spring"]` |
+| `language` (files)                 | files[]         | 文件语言类型：`c_cpp`、`python`、`go`、`lua`、`java`，由文件扩展名决定 |
 | `trust_level`                      | entry_points[]  | 入口点信任等级，决定该入口是否值得重点扫描                                                                                                                                                                                                  |
 | `justification`                    | entry_points[]  | 入口点可达性理由，要求 AI 解释为什么此入口是真实攻击面                                                                                                                                                                                      |
 
@@ -245,12 +297,12 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
       "end_time": "ISO8601",
       "duration_seconds": 325,
       "status": "success|failed|skipped",
-      "outputs": ["scan.db", "report.md"],
+      "outputs": ["scan.db", "details/", "report_confirmed.md", "report_unconfirmed.md"],
       "error": null
     }
   ],
   "summary": {
-    "project_type": "network_service|cli_tool|library|kernel_module|embedded|gui_application|web_application|cli_tool_python",
+    "project_type": "network_service|cli_tool|library|kernel_module|embedded|gui_application|web_application|cli_tool_python|go_service|lua_openresty|java_web_application|multi_language",
     "total_files_scanned": 50,
     "total_lines": 25000,
     "candidates_found": 13,
@@ -306,7 +358,7 @@ description: 多 Agent 间的通信规范，包括路径约定、JSON Schema 定
 
 ### 入口类型枚举
 
-与 `entry_points[].type` 一致：`network`, `file`, `env`, `cmdline`, `stdin`, `web_route`, `rpc`, `decorator`
+与 `entry_points[].type` 一致：`network`, `file`, `env`, `cmdline`, `stdin`, `web_route`, `rpc`, `decorator`, `grpc`, `servlet`, `spring_controller`, `openresty_phase`, `kong_plugin`, `message`
 
 ### 信任等级枚举
 

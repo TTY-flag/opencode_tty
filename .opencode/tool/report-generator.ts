@@ -23,6 +23,15 @@ interface Vuln {
   status: string | null
   source_agents: string | null
   source_module: string | null
+  language: string | null
+  framework: string | null
+  analysis_kind: string | null
+  source_kind: string | null
+  sink_kind: string | null
+  sanitizer_checked: string | null
+  evidence_json: string | null
+  rule_id: string | null
+  analysis_backend: string | null
   scoring_details: string | null
   veto_applied: number
   verification_reason: string | null
@@ -88,6 +97,20 @@ function formatSourceAgents(raw: string | null): string {
   return raw ?? "unknown"
 }
 
+function codeFenceLanguage(v: Vuln): string {
+  if (v.language === "python") return "python"
+  if (v.language === "go") return "go"
+  if (v.language === "lua") return "lua"
+  if (v.language === "java") return "java"
+  const file = v.file ?? ""
+  if (file.endsWith(".py") || file.endsWith(".pyw")) return "python"
+  if (file.endsWith(".go")) return "go"
+  if (file.endsWith(".lua") || file.endsWith(".rockspec")) return "lua"
+  if (file.endsWith(".java") || file.endsWith(".jsp") || file.endsWith(".jspx")) return "java"
+  if (file.endsWith(".cpp") || file.endsWith(".cc") || file.endsWith(".cxx") || file.endsWith(".hpp")) return "cpp"
+  return "c"
+}
+
 function buildVulnDetailSection(vulns: Vuln[], startSection: number): { lines: string[]; nextSection: number } {
   const lines: string[] = []
   const grouped: Record<string, Vuln[]> = {}
@@ -120,7 +143,19 @@ function buildVulnDetailSection(vulns: Vuln[], startSection: number): { lines: s
       const lineRange =
         v.line_start && v.line_end && v.line_end !== v.line_start ? `${v.line_start}-${v.line_end}` : String(v.line_start ?? "?")
       lines.push(`**位置**: \`${v.file ?? "?"}:${lineRange}\` @ \`${v.function_name ?? "?"}\``)
+      if (v.status === "CONFIRMED") lines.push(`**深度报告**: \`details/${v.id}.md\``)
       if (v.source_module) lines.push(`**模块**: ${v.source_module}`)
+      const langParts = [
+        v.language ? `语言: ${v.language}` : "",
+        v.framework ? `框架: ${v.framework}` : "",
+        v.analysis_kind ? `分析类型: ${v.analysis_kind}` : "",
+        v.rule_id ? `规则: ${v.rule_id}` : "",
+        v.analysis_backend ? `证据来源: ${v.analysis_backend}` : "",
+      ].filter(Boolean)
+      if (langParts.length > 0) lines.push(`**语言上下文**: ${langParts.join(" | ")}`)
+      if (v.source_kind || v.sink_kind) {
+        lines.push(`**Source/Sink**: ${v.source_kind ?? "?"} → ${v.sink_kind ?? "?"}`)
+      }
       if (v.cross_module && v.modules_involved) {
         const mods = parseJsonField(v.modules_involved)
         lines.push(`**跨模块**: ${Array.isArray(mods) ? mods.join(" → ") : v.modules_involved}`)
@@ -135,7 +170,7 @@ function buildVulnDetailSection(vulns: Vuln[], startSection: number): { lines: s
       if (v.code_snippet) {
         lines.push(`**漏洞代码** (\`${v.file ?? "?"}:${lineRange}\`)`)
         lines.push("")
-        lines.push("```c")
+        lines.push(`\`\`\`${codeFenceLanguage(v)}`)
         lines.push(v.code_snippet)
         lines.push("```")
         lines.push("")
@@ -151,6 +186,11 @@ function buildVulnDetailSection(vulns: Vuln[], startSection: number): { lines: s
 
       if (v.verification_reason) {
         lines.push(`**验证说明**: ${v.verification_reason}`)
+        lines.push("")
+      }
+
+      if (v.sanitizer_checked) {
+        lines.push(`**清洗/缓解检查**: ${v.sanitizer_checked}`)
         lines.push("")
       }
 

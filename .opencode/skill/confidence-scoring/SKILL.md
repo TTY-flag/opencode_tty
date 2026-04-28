@@ -180,7 +180,7 @@ IF 任一否决条件命中 → confidence = 0, status = FALSE_POSITIVE, 跳过�
 
 ```json
 {
-  "id": "VULN-DF-001",
+  "id": "VULN-DF-PY-SQLI-SEARCH-001",
   "confidence": 85,
   "status": "CONFIRMED",
   "veto_applied": false,
@@ -199,7 +199,7 @@ IF 任一否决条件命中 → confidence = 0, status = FALSE_POSITIVE, 跳过�
 
 ```json
 {
-  "id": "VULN-SEC-005",
+  "id": "VULN-SEC-JAVA-CONFIG-HTTPCLIENT-001",
   "confidence": 0,
   "status": "FALSE_POSITIVE",
   "veto_applied": true,

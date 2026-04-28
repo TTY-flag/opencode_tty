@@ -60,7 +60,7 @@ permission:
 ```
 
 - `{SCAN_OUTPUT}` 由协调者传递
-- `{VULN_ID}` 为漏洞 ID（如 `VULN-DF-MEM-001`）
+- `{VULN_ID}` 为漏洞 ID（如 `VULN-DF-CPP-MEMCPY-IPC-001`）
 - **只能写入此路径**，不得写入其他位置
 - **误报时不写入任何文件**
 
@@ -86,7 +86,7 @@ permission:
 vuln-db command=query db_path={DB_PATH} ids={VULN_ID}
 ```
 
-从返回的漏洞数据中提取：type、severity、file、line_start、line_end、function_name、code_snippet、data_flow、description 等。
+从返回的漏洞数据中提取：type、severity、file、line_start、line_end、function_name、code_snippet、data_flow、description、language、framework、analysis_kind、source_kind、sink_kind、sanitizer_checked、rule_id、analysis_backend、evidence_json 等。
 
 ### 步骤 2: 读取扩展代码上下文
 
@@ -179,16 +179,19 @@ vuln-db command=query db_path={DB_PATH} ids={VULN_ID}
 - **验证步骤**: 从环境搭建到触发漏洞的完整步骤
 - **预期结果**: 漏洞触发后的预期表现（崩溃、异常输出、信息泄露等）
 
-### 步骤 10: 构造漏洞简述标题
+### 步骤 10: 构造漏洞报告标题
 
-生成一个简洁的漏洞简述（10~40字），概括漏洞的本质特征：
+生成一个能够概括漏洞情况的中文标题。标题必须让审计人员不打开正文也能大致知道“哪里、因为什么、造成什么风险”。
 
-- **字数要求**: 严格控制在10~40字之间
-- **内容要求**: 概括漏洞类型、位置、触发条件、影响等关键信息
+- **长度要求**: 严格控制在12~50个中文字符之间
+- **内容要求**: 至少包含两类信息：受影响组件/函数、漏洞类型、触发条件、影响
+- **禁止泛化**: 不要使用“存在安全漏洞”“存在风险”“可被攻击”等空泛标题
+- **格式要求**: 最终一级标题必须使用真实 `{VULN_ID}`，格式为 `# {VULN_ID}: {概括性标题}`
 - **示例格式**:
-  - "网络数据处理函数中存在缓冲区溢出漏洞，可导致远程代码执行"
-  - "认证模块硬编码管理员密码，攻击者可直接获取系统控制权"
-  - "文件解析函数未校验输入长度，存在栈溢出风险可触发崩溃"
+  - "IPC 消息长度未校验进入 memcpy 导致缓冲区溢出"
+  - "订单查询参数拼接进入 SQL 导致注入"
+  - "Spring HTTP 客户端信任所有证书导致中间人攻击"
+  - "认证配置硬编码管理员密钥导致权限绕过"
 - **语言要求**: 必须使用中文
 
 ### 步骤 11: 生成报告文件
@@ -198,18 +201,29 @@ vuln-db command=query db_path={DB_PATH} ids={VULN_ID}
 将分析结果写入 `{SCAN_OUTPUT}/details/{VULN_ID}.md`，格式如下：
 
 ````markdown
-# {编号}: {漏洞简述}
+# {VULN_ID}: {概括性标题}
 
-> **简述长度**: 必须在10~40字之间，简洁概括漏洞本质
+> **标题要求**: 12~50个中文字符，概括受影响组件、漏洞类型、触发条件或影响，不得使用空泛标题
 
 **严重性**: {verified_severity} | **CWE**: {cwe} | **置信度**: {confidence}/100
 **位置**: `{file}:{line_start}-{line_end}` @ `{function_name}`
+**语言/框架**: {language} / {framework}
+**分析类型**: {analysis_kind}
+**Source/Sink**: {source_kind} → {sink_kind}
+**规则/证据来源**: {rule_id} / {analysis_backend}
 
 ---
 
 ## 1. 漏洞细节
 
 [漏洞的详细技术描述，包括漏洞成因、触发机制、涉及的关键代码逻辑]
+
+### 证据摘要
+
+- 触发源: {source_kind}
+- 危险点: {sink_kind}
+- 已检查的清洗/缓解: {sanitizer_checked}
+- 关键证据: [从 evidence_json、data_flow 和实际代码中提炼]
 
 ## 2. 漏洞代码
 

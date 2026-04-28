@@ -52,7 +52,10 @@ permission:
 | 语言 | 文件扩展名 |
 |------|-----------|
 | C/C++ | `.c`, `.cpp`, `.h`, `.hpp`, `.cc`, `.cxx` |
-| Python | `.py` |
+| Python | `.py`, `.pyw` |
+| Go | `.go` |
+| Lua | `.lua`, `.rockspec` |
+| Java | `.java`, `.jsp`, `.jspx` |
 
 排除以下目录：`test/`, `tests/`, `mock/`, `example/`, `vendor/`, `third_party/`, `external/`, `deps/`, `venv/`, `site-packages/`, `__pycache__/`, `.tox/`, `node_modules/`
 
@@ -62,26 +65,26 @@ permission:
 - README.md, README, INSTALL
 - ARCHITECTURE.md, DESIGN.md
 - SECURITY.md, THREAT_MODEL.md
-- Makefile, CMakeLists.txt, setup.py, pyproject.toml, requirements.txt
+- Makefile, CMakeLists.txt, setup.py, pyproject.toml, requirements.txt, go.mod, pom.xml, build.gradle, nginx.conf, *.rockspec
 
 **步骤 4：推断项目类型**
 
 根据文档和文件特征推断项目类型：
 
-| 项目类型 | C/C++ 判据 | Python 判据 |
-|---------|-----------|-------------|
-| 网络服务 | `listen()`/`accept()`, systemd unit | Flask/Django/FastAPI, `uvicorn` |
-| CLI 工具 | `main()` 解析 argv | `argparse`/`click`/`typer` |
-| 库/SDK | 无 main(), .so/.a 构建 | `setup.py`/`pyproject.toml`, 无 Web 框架 |
-| 内核模块 | `MODULE_LICENSE`, `ioctl` | — |
-| Web 应用 | — | `@app.route`, `urls.py`, `manage.py` |
+| 项目类型 | C/C++ 判据 | Python 判据 | Go/Lua/Java 判据 |
+|---------|-----------|-------------|------------------|
+| 网络服务 | `listen()`/`accept()`, systemd unit | Flask/Django/FastAPI, `uvicorn` | `http.ListenAndServe`, OpenResty `ngx.*`, Spring Controller |
+| CLI 工具 | `main()` 解析 argv | `argparse`/`click`/`typer` | Go `flag/cobra`, Lua `arg`, Java `main(String[] args)` |
+| 库/SDK | 无 main(), .so/.a 构建 | `setup.py`/`pyproject.toml`, 无 Web 框架 | Go package、Lua module、Java library |
+| 内核模块 | `MODULE_LICENSE`, `ioctl` | — | — |
+| Web 应用 | — | `@app.route`, `urls.py`, `manage.py` | Gin/Echo/Fiber、OpenResty/Kong、Spring/Servlet/JAX-RS |
 
 向用户报告扫描结果摘要：
 
 ```
 === 项目概览 ===
 - 项目路径: {PROJECT_ROOT}
-- 语言组成: C/C++ XX 文件 / Python XX 文件
+- 语言组成: C/C++ XX 文件 / Python XX 文件 / Go XX 文件 / Lua XX 文件 / Java XX 文件
 - 推断类型: [项目类型]
 - 主要功能: [从文档推断的简述]
 ```
@@ -110,6 +113,29 @@ permission:
 - **用户输入**: `input()`
 - **消息队列**: `@celery_app.task`, Redis/RabbitMQ 消费者
 - **WebSocket**: `@socketio.on()`, `websocket.receive()`
+
+#### Go 入口模式
+
+- **Web 路由**: `http.HandleFunc`, Gin/Echo/Fiber `.GET/.POST`
+- **HTTP 服务**: `http.ListenAndServe`, `ServeHTTP`
+- **gRPC**: `grpc.NewServer`, `Register*Server`
+- **命令行入口**: `func main()`, `flag.*`, Cobra command
+- **文件/环境入口**: `os.Args`, `os.Getenv`, `os.Open`, `os.ReadFile`
+
+#### Lua 入口模式
+
+- **OpenResty**: `ngx.var`, `ngx.req.get_uri_args`, `ngx.req.get_post_args`, `content_by_lua`
+- **Kong 插件**: `kong.request.*`, `access`, `rewrite`, `body_filter`
+- **命令行/脚本**: `arg[...]`, `io.read`, `os.getenv`
+- **宿主回调**: `handler.lua`, `schema.lua`, module return table
+
+#### Java 入口模式
+
+- **Spring MVC**: `@RestController`, `@RequestMapping`, `@GetMapping`, `@PostMapping`
+- **Servlet**: `extends HttpServlet`, `doGet`, `doPost`, `Filter#doFilter`
+- **JAX-RS**: `@Path`, `@GET`, `@POST`
+- **消息/任务**: `@KafkaListener`, `@JmsListener`, `@Scheduled`
+- **CLI/文件/环境**: `main(String[] args)`, `System.getenv`, `Files.read*`
 
 #### 入口信任等级标注
 

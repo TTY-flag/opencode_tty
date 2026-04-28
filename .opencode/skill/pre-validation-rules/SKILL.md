@@ -1,6 +1,6 @@
 ---
 name: pre-validation-rules
-description: 漏洞预验证和误报过滤规则。在报告候选漏洞之前使用此 Skill 进行快速过滤，减少误报率。适用于 DataFlow Scanner 和 Security Auditor，支持 C/C++ 和 Python。
+description: 漏洞预验证和误报过滤规则。在报告候选漏洞之前使用此 Skill 进行快速过滤，减少误报率。适用于 DataFlow Scanner 和 Security Auditor，支持 C/C++、Python、Go、Lua、Java。
 ---
 
 ## Use this when
@@ -9,26 +9,25 @@ description: 漏洞预验证和误报过滤规则。在报告候选漏洞之前�
 - 需要快速过滤明显的误报
 - 判断某个安全发现是否需要报告
 
-## 扫描范围排除的漏洞类别
+## 扫描职责边界过滤
 
-以下漏洞类别**不在本系统的扫描范围内**，发现时应**直接跳过**，不加入候选漏洞列表：
+本系统保留两个 scanner coordinator，但职责必须清晰分离。发现潜在漏洞后，先判断它应该由哪个通道处理，避免重复报告。
 
-| 排除类别 | CWE | 判定方法 | 排除原因 |
-|---------|-----|----------|----------|
-| 端点缺少认证/授权 | CWE-306 | API 端点/路由无认证中间件、Python 路由缺 `@login_required` | 属于架构设计层面问题 |
-| 认证绕过链 | CWE-288 | 跨模块认证绕过路径、IP 伪造绕过等 | 属于架构设计层面问题 |
-| TLS 证书验证 | CWE-295 | `SSL_VERIFY_NONE`、CRL 过期未阻断、`verify=False` | 属于部署配置层面问题 |
-| 弱加密算法 | CWE-327/328 | MD5/SHA1 用于安全用途、DES、RC4、ECB 模式 | 由专项密码学审计覆盖 |
-| 不安全随机数 | CWE-338/337 | `rand()`、`srand(time())`、Python `random` 模块用于密钥/令牌 | 由专项密码学审计覆盖 |
-| 时序攻击 | CWE-208 | `strcmp`/`memcmp` 比较密码、令牌 | 由专项密码学审计覆盖 |
+| 通道 | 应报告 | 应跳过并交给另一通道 |
+| ---- | ------ | -------------------- |
+| `dataflow-scanner` | 能证明 `source -> sanitizer -> sink` 的数据流问题，例如注入、路径遍历、SSRF、反序列化、C/C++ 长度进入内存拷贝 | 认证/授权策略、TLS/加密配置、硬编码凭证、会话配置、框架安全开关等无明确 source->sink 的语义问题 |
+| `security-auditor` | 认证、授权、会话、密钥、TLS/加密、随机数、框架误用、部署/运行时安全配置等语义安全问题 | 普通 SQL/命令/模板/路径/XXE 等已由 dataflow-scanner 覆盖的 source->sink 漏洞，除非根因是安全策略或配置语义错误 |
 
-**仍在扫描范围内的相关类型**（不要误排除）：
-- 硬编码凭证（CWE-798）— 如 `password = "admin123"`
-- JWT 安全问题（CWE-347）— 如 `jwt.decode(..., verify=False)`
-- Session/OAuth 安全 — 如不安全的 cookie 配置
-- IDOR（CWE-639）、Mass Assignment
-- 弱 TLS 协议（CWE-326）— 如 SSLv2/SSLv3
-- 权限提升（setuid/setgid/capabilities）
+Security Auditor 的典型范围包括：
+
+- 端点缺少认证/授权（CWE-306）
+- 认证绕过链（CWE-288）
+- TLS 证书验证问题（CWE-295）
+- 弱加密算法（CWE-327/328）
+- 不安全随机数（CWE-338/337）
+- 时序攻击（CWE-208）
+- 硬编码凭证（CWE-798）
+- JWT、Session、OAuth、IDOR、Mass Assignment、权限提升、框架安全配置问题
 
 ## 通用快速过滤条件
 
@@ -36,12 +35,15 @@ description: 漏洞预验证和误报过滤规则。在报告候选漏洞之前�
 
 | 条件 | 检查方法 | 适用场景 |
 |------|----------|----------|
-| 测试代码 | 文件路径包含 `test/`、`tests/`、`mock/`、`example/`、`_test.c`、`_test.cpp`、`test_*.py`、`*_test.py`、`conftest.py` | 所有扫描 |
+| 测试代码 | 文件路径包含 `test/`、`tests/`、`mock/`、`example/`、`_test.c`、`_test.cpp`、`test_*.py`、`*_test.py`、`*_test.go`、`Test*.java`、`*Test.java`、`spec/`、`conftest.py` | 所有扫描 |
 | 编译时常量 (C/C++) | 参数为 `sizeof()`、`#define` 常量、`const` 变量、枚举值 | C/C++ 数据流分析 |
 | 相邻边界检查 | ±5 行内存在 `if(len <)`、`if(size >)`、`if(n <=)` 等边界检查 | 数据流分析 |
-| 死代码 | C/C++: `#if 0`、`#ifdef DEBUG`（非生产）、`if(false)`；Python: `if False:`、`if 0:` | 所有扫描 |
+| 死代码 | C/C++: `#if 0`、`#ifdef DEBUG`（非生产）、`if(false)`；Python: `if False:`、`if 0:`；Go: 非当前 build tag；Lua/Java: 永假分支 | 所有扫描 |
 | 安全替代函数 (C/C++) | 已使用 `strncpy`、`snprintf`、`strlcpy` 等安全版本且参数正确 | C/C++ 数据流分析 |
 | 安全替代方式 (Python) | 已使用参数化查询、`shlex.quote()`、`subprocess.run([...], shell=False)` 等安全方式 | Python 数据流分析 |
+| 安全替代方式 (Go) | 已使用参数化查询、固定 `exec.Command`、URL allowlist、base 路径前缀检查 | Go 数据流分析 |
+| 安全替代方式 (Lua) | 已使用完整白名单、参数化/escape API、拒绝外部输入进入 `load/loadstring` | Lua 数据流分析 |
+| 安全替代方式 (Java) | 已使用 `PreparedStatement`、XML secure processing、ObjectInputFilter、`toRealPath` + base 检查 | Java 数据流分析 |
 | 注释代码 | C/C++: `/* */` 或 `//`；Python: `#` 或三引号 `"""..."""` 注释块 | 所有扫描 |
 | 第三方代码 | 文件路径包含 `vendor/`、`third_party/`、`external/`、`deps/`、`venv/`、`site-packages/`、`__pycache__/`、`.tox/` | 所有扫描 |
 
@@ -71,8 +73,8 @@ description: 漏洞预验证和误报过滤规则。在报告候选漏洞之前�
 ```
 发现潜在漏洞
   ↓
-检查0: 漏洞类型是否在"扫描范围排除"列表中？ → 是 → 直接跳过
-       （CWE-306/288/295/327/328/338/337/208）
+检查0: 是否属于当前 scanner coordinator 的职责边界？ → 否 → 跳过当前通道，交由对应通道处理
+       （dataflow 只收 source->sink；security 只收语义/策略/配置）
   ↓
 检查1: 文件路径是否为测试/示例/第三方代码？ → 是 → 跳过
        （含 venv/、site-packages/、__pycache__/、test_*.py、conftest.py）

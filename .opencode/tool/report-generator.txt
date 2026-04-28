@@ -8,13 +8,14 @@ Report content (per file):
 1. Scan summary - severity distribution table, verification status table (computed via SQL GROUP BY)
 2. Top 10 critical vulnerabilities - sorted by severity then confidence
 3. Attack surface analysis - from project_model.json entry_points
-4. Complete vulnerability details - grouped by verified_severity (Critical > High > Medium > Low), each with ID, type, CWE, location, description, confidence, data flow, code snippet
+4. Complete vulnerability details - grouped by verified_severity (Critical > High > Medium > Low), each with ID, type, CWE, analysis_kind, location, details/{VULN_ID}.md link for CONFIRMED findings, description, confidence, data flow, code snippet
 5. Module distribution - cross-tabulation of modules x severity
 6. CWE distribution - count by CWE ID
 
 After generation, the Reporter LLM should:
 - Add an executive summary paragraph at the top of the confirmed report
-- Enrich Top 5 vulnerabilities with deeper analysis (reading source code for context)
+- Verify the details/ directory has one file per CONFIRMED true finding
+- Add or refine the single-vulnerability report index
 - Add a remediation recommendations section
 
 Parameters:
