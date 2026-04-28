@@ -102,6 +102,7 @@ security-auditor (协调者 - 你)
 
 从 Orchestrator 接收：
 - **路径上下文**：项目根目录、扫描输出目录、上下文目录
+- **扫描深度**：`SCAN_PROFILE`、`MAX_ROUNDS`、profile 配置（来自 `scan-profiles.json`）
 
 从上下文目录读取：
 1. **`{CONTEXT_DIR}/project_model.json`** → 模块列表、文件分组、入口点
@@ -142,7 +143,7 @@ vuln-db command=work-stats db_path={DB_PATH} agent_name=security-auditor
 vuln-db command=work-requeue db_path={DB_PATH} agent_name=security-auditor
 ```
 
-如果没有任何 work item，则从 `project_model.json` + `call_graph.json` 生成队列。
+如果没有任何 work item，则从 `project_model.json` + `call_graph.json` 生成第 1 轮队列。
 
 生成队列时必须优先使用稳定 ID：
 - 模块使用 `modules[].id`
@@ -185,7 +186,7 @@ vuln-db command=work-requeue db_path={DB_PATH} agent_name=security-auditor
 为每个任务生成稳定 ID，建议格式：
 
 ```
-sec-{language}-{module_slug}-{shard_type}-{sequence}
+sec-r{round}-{language}-{module_slug}-{shard_type}-{sequence}
 ```
 
 然后调用：
@@ -193,6 +194,12 @@ sec-{language}-{module_slug}-{shard_type}-{sequence}
 ```
 vuln-db command=work-add db_path={DB_PATH} work_items='[...]'
 ```
+
+每个 work item 必须包含：
+- `profile`: 当前 `SCAN_PROFILE`
+- `round`: 当前轮次，从 1 开始
+- `module_id`: `project_model.json` 中的模块稳定 ID
+- `context.node_ids` / `context.edge_ids` / `context.data_flow_ids`: 与该切片相关的调用图 ID
 
 ### 阶段 3: Claim Work Item 并调度子 Agent
 
@@ -260,10 +267,45 @@ vuln-db command=work-claim db_path={DB_PATH} agent_name=security-auditor limit=1
 1. 只审计当前 work item 规定的文件和 focus，不扩大到整个模块
 2. 标记可能涉及跨模块的安全逻辑（凭证传递等）
 3. **使用 `vuln-db insert` 将候选漏洞写入数据库**
-4. 完成后由协调者调用 `work-complete`，失败则调用 `work-fail`
-5. 返回文本只包含：审计统计、跨模块安全提示（不含完整漏洞详情）
-6. **遵守职责边界**：不重复报告普通 source→sink 数据流漏洞；每条候选必须设置 `analysis_kind`
+4. 返回文本必须包含覆盖账本摘要（见下文），协调者据此调用 `coverage-add`
+5. 完成后由协调者调用 `work-complete`，失败则调用 `work-fail`
+6. 返回文本只包含：审计统计、覆盖账本摘要、跨模块安全提示（不含完整漏洞详情）
+7. **遵守职责边界**：不重复报告普通 source→sink 数据流漏洞；每条候选必须设置 `analysis_kind`
 ```
+
+#### 覆盖账本回写（必须）
+
+每个 worker 完成后，协调者必须把 worker 的覆盖摘要写入 `scan_coverage`：
+
+```text
+vuln-db command=coverage-add db_path={DB_PATH} coverage_items='[
+  {
+    "agent_name": "security-auditor",
+    "work_item_id": "{WORK_ITEM_ID}",
+    "profile": "{SCAN_PROFILE}",
+    "round": 1,
+    "source_module": "...",
+    "module_id": "...",
+    "language": "java",
+    "shard_type": "entrypoint_slice",
+    "files": ["..."],
+    "entrypoints": ["ep-..."],
+    "sinks": ["authorization", "jwt", "tls"],
+    "nodes": ["fn-..."],
+    "edges": ["edge-..."],
+    "coverage_status": "complete|partial|blocked|shallow|expansion_needed",
+    "findings_count": 0,
+    "negative_evidence": "入口已确认经过 Spring Security filter chain 和 method-level role check",
+    "expansion_request": {
+      "reason": "SecurityFilterChain bean not in files_json",
+      "missing_files": ["src/main/java/app/SecurityConfig.java"],
+      "suggested_work_items": ["expansion_slice"]
+    }
+  }
+]'
+```
+
+当 worker 返回 `EXPANSION_NEEDED`、证据不足、只看了很少文件、没有列出认证/授权/配置检查项，或高风险任务 0 finding 且没有 `negative_evidence` 时，`coverage_status` 必须写为 `expansion_needed` / `shallow` / `partial`，不能写成 `complete`。
 
 Worker 成功后：
 
@@ -284,6 +326,30 @@ vuln-db command=work-fail db_path={DB_PATH} id={WORK_ITEM_ID} message="[失败�
 1. **审计统计**: 该模块发现的候选漏洞数量
 2. **跨模块安全提示**: 凭证传递等跨模块风险
 
+### 阶段 4.5: 多轮补扫与 Expansion Loop
+
+当当前轮次所有 pending work item 处理完成后，调用：
+
+```text
+vuln-db command=coverage-stats db_path={DB_PATH} agent_name=security-auditor
+vuln-db command=coverage-query db_path={DB_PATH} agent_name=security-auditor coverage_status=expansion_needed
+vuln-db command=coverage-query db_path={DB_PATH} agent_name=security-auditor coverage_status=shallow
+vuln-db command=coverage-query db_path={DB_PATH} agent_name=security-auditor coverage_status=partial
+```
+
+如果 `round < MAX_ROUNDS`，必须根据覆盖账本生成下一轮 `expansion_slice` / `sink_slice` / `cross_module_slice`：
+
+| 触发条件 | 下一轮任务 |
+| -------- | ---------- |
+| `coverage_status=expansion_needed` | 根据 `expansion_request.missing_files` 生成 `expansion_slice` |
+| `coverage_status=shallow` | 缩小主题后重新生成 authn/authz/crypto/config `sink_slice` |
+| `coverage_status=partial` | 补查缺失的认证链、授权点、配置来源或凭证流 |
+| Critical/High 安全模块 0 findings 且无 `negative_evidence` | 生成高风险 negative-review `expansion_slice` |
+| `call_graph.unresolved[]` 涉及当前模块 | 生成框架注入、反射、装饰器、Lua table dispatch 补查 |
+| worker 提供 `[CREDENTIAL_FLOW]` 或权限状态跨模块线索 | 生成 `cross_module_slice` |
+
+如果已经达到 `MAX_ROUNDS`，允许停止补扫，但必须在返回给 Orchestrator 的摘要中列出未解决的覆盖缺口和原因。
+
 ### 阶段 5: 跨模块安全分析
 
 收集所有子 Agent 的跨模块安全提示后，按以下步骤执行：
@@ -302,10 +368,11 @@ vuln-db command=work-fail db_path={DB_PATH} id={WORK_ITEM_ID} message="[失败�
 
 ```
 vuln-db command=work-stats db_path={DB_PATH} agent_name=security-auditor
+vuln-db command=coverage-stats db_path={DB_PATH} agent_name=security-auditor
 vuln-db command=stats db_path={DB_PATH} phase=candidate
 ```
 
-检查返回的统计信息，确认 work item 均为 `success/skipped`，候选漏洞数量与 worker 报告一致。允许某些任务 `success` 且 finding_count=0，这代表该切片已审计但没有发现。
+检查返回的统计信息，确认 work item 均为 `success/skipped`，覆盖账本中没有未处理的 `expansion_needed/shallow/partial`（或已达到 `MAX_ROUNDS` 并记录原因），候选漏洞数量与 worker 报告一致。允许某些任务 `success` 且 finding_count=0，但高风险任务必须有 `negative_evidence`。
 
 同时调用 `vuln-db log` 记录完成状态：
 

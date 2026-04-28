@@ -15,6 +15,8 @@ Every generated `project_model.json` file must mark each source file with one of
 - Attach `evidence` and `confidence` to high-risk modules, entry points, call edges, and data flows.
 - Treat `call_graph.json` as a risk-focused sparse graph. It should contain `nodes`, `edges`, `data_flows`, and `unresolved`, not a full-project graph.
 - Do not promote model-only inference to a high-confidence fact.
+- Every scanner work item must produce a `COVERAGE_LEDGER` summary. Coordinators must persist it with `vuln-db coverage-add` before marking the work item complete.
+- Use `scan-profiles.json` to control scan duration. `deep` is the default for vulnerability hunting.
 
 ## Evidence First
 

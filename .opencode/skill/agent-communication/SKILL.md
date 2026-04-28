@@ -406,7 +406,7 @@ Work item JSON 示例：
 | ------------------------ | ---------------------------------------- | ----------------------- |
 | Orchestrator             | `vuln-db init`                           | 创建数据库              |
 | Scanner Worker           | `vuln-db insert`                         | 写入候选漏洞            |
-| Scanner Coordinator      | `vuln-db stats`                          | 验证扫描完整性          |
+| Scanner Coordinator      | `vuln-db work-*` + `coverage-*` + `stats` | 调度任务、记录覆盖账本、验证扫描完整性 |
 | Verification Coordinator | `vuln-db dedup` + `vuln-db query`        | 去重 + 获取候选列表     |
 | Verification Worker      | `vuln-db query` + `vuln-db batch-update` | 获取批次 + 写回验证结果 |
 | Reporter                 | `report-generator` 工具                  | 程序化生成完整报告      |
@@ -421,6 +421,14 @@ Work item JSON 示例：
   "duration_seconds": 1800,
   "project_name": "项目名称",
   "status": "completed|failed|partial",
+  "scan_profile": "quick|standard|deep|paranoid",
+  "max_rounds": 4,
+  "profile_config": {
+    "max_expansions_per_module": 3,
+    "rescan_high_risk_empty_modules": true,
+    "require_negative_evidence": true,
+    "duplicate_high_risk_review": true
+  },
   "agents": [
     {
       "name": "agent-name",
@@ -428,6 +436,13 @@ Work item JSON 示例：
       "end_time": "ISO8601",
       "duration_seconds": 325,
       "status": "success|failed|skipped",
+      "rounds_completed": 4,
+      "coverage_status": {
+        "complete": 42,
+        "partial": 0,
+        "shallow": 0,
+        "expansion_needed": 0
+      },
       "outputs": ["scan.db", "details/", "report_confirmed.md", "report_unconfirmed.md"],
       "error": null
     }

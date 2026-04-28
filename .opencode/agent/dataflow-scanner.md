@@ -96,6 +96,7 @@ dataflow-scanner (协调者 - 你)
 
 从 Orchestrator 接收：
 - **路径上下文**：项目根目录、扫描输出目录、上下文目录
+- **扫描深度**：`SCAN_PROFILE`、`MAX_ROUNDS`、profile 配置（来自 `scan-profiles.json`）
 
 从上下文目录读取：
 1. **`{CONTEXT_DIR}/project_model.json`** → 模块列表、文件分组、入口点
@@ -157,7 +158,7 @@ vuln-db command=work-stats db_path={DB_PATH} agent_name=dataflow-scanner
 vuln-db command=work-requeue db_path={DB_PATH} agent_name=dataflow-scanner
 ```
 
-如果没有任何 work item，则从 `project_model.json` + `call_graph.json` 生成队列。
+如果没有任何 work item，则从 `project_model.json` + `call_graph.json` 生成第 1 轮队列。
 
 生成队列时必须优先使用稳定 ID：
 - 模块使用 `modules[].id`
@@ -200,7 +201,7 @@ vuln-db command=work-requeue db_path={DB_PATH} agent_name=dataflow-scanner
 为每个任务生成稳定 ID，建议格式：
 
 ```
-df-{language}-{module_slug}-{shard_type}-{sequence}
+df-r{round}-{language}-{module_slug}-{shard_type}-{sequence}
 ```
 
 然后调用：
@@ -208,6 +209,12 @@ df-{language}-{module_slug}-{shard_type}-{sequence}
 ```
 vuln-db command=work-add db_path={DB_PATH} work_items='[...]'
 ```
+
+每个 work item 必须包含：
+- `profile`: 当前 `SCAN_PROFILE`
+- `round`: 当前轮次，从 1 开始
+- `module_id`: `project_model.json` 中的模块稳定 ID
+- `context.node_ids` / `context.edge_ids` / `context.data_flow_ids`: 与该切片相关的调用图 ID
 
 ### 阶段 4: Claim Work Item 并调度子 Agent
 
@@ -276,9 +283,45 @@ vuln-db command=work-claim db_path={DB_PATH} agent_name=dataflow-scanner limit=1
 2. 只报告具备 source→sink 证据链的候选；语义/策略/配置问题留给 security-auditor
 3. 标记可能流出模块的数据（供跨模块分析）
 4. **使用 `vuln-db insert` 将候选漏洞写入数据库，并设置 `analysis_kind: "dataflow"`**
-5. 完成后由协调者调用 `work-complete`，失败则调用 `work-fail`
-6. 返回文本只包含：扫描统计、跨模块数据流提示（不含完整漏洞详情）
+5. 返回文本必须包含覆盖账本摘要（见下文），协调者据此调用 `coverage-add`
+6. 完成后由协调者调用 `work-complete`，失败则调用 `work-fail`
+7. 返回文本只包含：扫描统计、覆盖账本摘要、跨模块数据流提示（不含完整漏洞详情）
 ```
+
+#### 覆盖账本回写（必须）
+
+每个 worker 完成后，协调者必须把 worker 的覆盖摘要写入 `scan_coverage`：
+
+```text
+vuln-db command=coverage-add db_path={DB_PATH} coverage_items='[
+  {
+    "agent_name": "dataflow-scanner",
+    "work_item_id": "{WORK_ITEM_ID}",
+    "profile": "{SCAN_PROFILE}",
+    "round": 1,
+    "source_module": "...",
+    "module_id": "...",
+    "language": "java",
+    "shard_type": "entrypoint_slice",
+    "files": ["..."],
+    "entrypoints": ["ep-..."],
+    "sinks": ["sql_execution"],
+    "nodes": ["fn-..."],
+    "edges": ["edge-..."],
+    "data_flows": ["flow-..."],
+    "coverage_status": "complete|partial|blocked|shallow|expansion_needed",
+    "findings_count": 0,
+    "negative_evidence": "高风险入口已追踪到 repository 层，未发现字符串拼接 SQL",
+    "expansion_request": {
+      "reason": "AuthService implementation not in files_json",
+      "missing_files": ["src/auth/AuthServiceImpl.java"],
+      "suggested_work_items": ["expansion_slice"]
+    }
+  }
+]'
+```
+
+当 worker 返回 `EXPANSION_NEEDED`、证据不足、只看了很少文件、没有列出 source/sink，或高风险任务 0 finding 且没有 `negative_evidence` 时，`coverage_status` 必须写为 `expansion_needed` / `shallow` / `partial`，不能写成 `complete`。
 
 Worker 成功后：
 
@@ -301,6 +344,30 @@ vuln-db command=work-fail db_path={DB_PATH} id={WORK_ITEM_ID} message="[失败�
 
 **不要将漏洞详情保存在协调者上下文中**，只记录统计和跨模块提示。
 
+### 阶段 5.5: 多轮补扫与 Expansion Loop
+
+当当前轮次所有 pending work item 处理完成后，调用：
+
+```text
+vuln-db command=coverage-stats db_path={DB_PATH} agent_name=dataflow-scanner
+vuln-db command=coverage-query db_path={DB_PATH} agent_name=dataflow-scanner coverage_status=expansion_needed
+vuln-db command=coverage-query db_path={DB_PATH} agent_name=dataflow-scanner coverage_status=shallow
+vuln-db command=coverage-query db_path={DB_PATH} agent_name=dataflow-scanner coverage_status=partial
+```
+
+如果 `round < MAX_ROUNDS`，必须根据覆盖账本生成下一轮 `expansion_slice` / `sink_slice` / `cross_module_slice`：
+
+| 触发条件 | 下一轮任务 |
+| -------- | ---------- |
+| `coverage_status=expansion_needed` | 根据 `expansion_request.missing_files` 生成 `expansion_slice` |
+| `coverage_status=shallow` | 缩小 focus 后重新生成同模块 `sink_slice` 或 `entrypoint_slice` |
+| `coverage_status=partial` | 只补缺失 source/sink/sanitizer 证据 |
+| Critical/High 模块 0 findings 且无 `negative_evidence` | 生成高风险 negative-review `expansion_slice` |
+| `call_graph.unresolved[]` 涉及当前模块 | 生成动态调用/框架分发补查 `expansion_slice` |
+| worker 提供 `[OUT]` / `[IN]` 匹配线索 | 生成 `cross_module_slice` |
+
+如果已经达到 `MAX_ROUNDS`，允许停止补扫，但必须在返回给 Orchestrator 的摘要中列出未解决的覆盖缺口和原因。
+
 ### 阶段 6: 跨模块数据流分析
 
 收集所有子 Agent 的跨模块提示后，按以下步骤执行：
@@ -319,10 +386,11 @@ vuln-db command=work-fail db_path={DB_PATH} id={WORK_ITEM_ID} message="[失败�
 
 ```
 vuln-db command=work-stats db_path={DB_PATH} agent_name=dataflow-scanner
+vuln-db command=coverage-stats db_path={DB_PATH} agent_name=dataflow-scanner
 vuln-db command=stats db_path={DB_PATH} phase=candidate
 ```
 
-检查返回的统计信息，确认 work item 均为 `success/skipped`，候选漏洞数量与 worker 报告一致。允许某些任务 `success` 且 finding_count=0，这代表该切片已扫描但没有发现。
+检查返回的统计信息，确认 work item 均为 `success/skipped`，覆盖账本中没有未处理的 `expansion_needed/shallow/partial`（或已达到 `MAX_ROUNDS` 并记录原因），候选漏洞数量与 worker 报告一致。允许某些任务 `success` 且 finding_count=0，但高风险任务必须有 `negative_evidence`。
 
 同时调用 `vuln-db log` 记录完成状态：
 

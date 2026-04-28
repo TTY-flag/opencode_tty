@@ -69,6 +69,12 @@ interface ProjectModel {
   attack_surfaces?: string[]
 }
 
+interface CoverageCount {
+  agent_name: string
+  coverage_status: string
+  cnt: number
+}
+
 const SEVERITY_LEVELS = ["Critical", "High", "Medium", "Low"]
 
 function severitySortKey(s: string | null): number {
@@ -283,6 +289,7 @@ function buildSingleReport(opts: {
   statusCounts: Array<{ status: string; cnt: number }>
   moduleSeverity: Array<{ source_module: string; sev: string; cnt: number }>
   cweCounts: Array<{ cwe: string; cnt: number }>
+  coverageCounts: CoverageCount[]
   projectModel: ProjectModel
 }): string {
   const { vulns, projectModel } = opts
@@ -372,7 +379,22 @@ function buildSingleReport(opts: {
   md.push(`---`)
   md.push("")
 
-  const { lines: detailLines, nextSection } = buildVulnDetailSection(vulns, 3)
+  md.push(`## 3. 覆盖账本摘要`)
+  md.push("")
+  if (opts.coverageCounts.length > 0) {
+    md.push(`| Agent | 覆盖状态 | 数量 |`)
+    md.push(`|-------|----------|------|`)
+    for (const row of opts.coverageCounts) {
+      md.push(`| ${row.agent_name} | ${row.coverage_status} | ${row.cnt} |`)
+    }
+  } else {
+    md.push(`未找到覆盖账本数据。`)
+  }
+  md.push("")
+  md.push(`---`)
+  md.push("")
+
+  const { lines: detailLines, nextSection } = buildVulnDetailSection(vulns, 4)
   md.push(...detailLines)
 
   md.push(...buildDistributionSection(vulns, opts.moduleSeverity, opts.cweCounts, nextSection))
@@ -465,11 +487,26 @@ export default tool({
           .all(minConf) as Array<{ cwe: string; cnt: number }>
       }
 
+      function queryCoverageCounts(): CoverageCount[] {
+        try {
+          return db
+            .prepare(
+              `SELECT agent_name, coverage_status, COUNT(*) as cnt
+             FROM scan_coverage
+             GROUP BY agent_name, coverage_status
+             ORDER BY agent_name, coverage_status`,
+            )
+            .all() as CoverageCount[]
+        } catch {
+          return []
+        }
+      }
+
       const basePath = args.output_path.replace(/\.md$/i, "")
       const confirmedPath = `${basePath}_confirmed.md`
       const unconfirmedPath = `${basePath}_unconfirmed.md`
 
-      const sharedOpts = { projectName, scanTime, totalVerified, falsePositives, statusCounts, projectModel }
+      const sharedOpts = { projectName, scanTime, totalVerified, falsePositives, statusCounts, projectModel, coverageCounts: queryCoverageCounts() }
 
       const confirmedReport = buildSingleReport({
         ...sharedOpts,

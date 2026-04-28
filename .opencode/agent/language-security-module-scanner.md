@@ -131,6 +131,29 @@ vuln-db command=insert db_path={DB_PATH} vulnerabilities='[
 === 结束 ===
 ```
 
+## 覆盖账本摘要（必须返回）
+
+返回摘要中必须包含一个 `COVERAGE_LEDGER` 块，供协调者写入 `vuln-db coverage-add`：
+
+```text
+COVERAGE_LEDGER:
+  work_item_id: [当前 work item id]
+  coverage_status: complete|partial|blocked|shallow|expansion_needed
+  files_scanned: [相对路径数组]
+  entrypoints_checked: [入口点 ID 或 file:line]
+  security_topics_checked: [authn/authz/session/secret/crypto/config/framework_misuse]
+  nodes_checked: [call_graph node id]
+  edges_checked: [call_graph edge id]
+  findings_count: [候选漏洞数]
+  negative_evidence: [0 finding 时必须说明看过哪些认证/授权/配置/凭证点且为何暂未发现问题]
+  expansion_request:
+    reason: [需要更多上下文的原因；不需要则写 none]
+    missing_files: [建议补充的文件]
+    missing_symbols: [建议补查的函数/符号]
+```
+
+如果无法确认认证/授权链、缺少关键配置、只完成轻量扫描或返回 `EXPANSION_NEEDED`，`coverage_status` 不得写 `complete`。
+
 ## 注意事项
 
 1. 不要重复生成普通 source→sink 数据流漏洞，除非根因是认证、授权、配置或框架语义错误。

@@ -44,15 +44,15 @@ Commands:
 
 10. work-add - Add scan work items for large-project sharded scanning.
     Required: db_path, work_items (JSON array string)
-    Each item should include: id, agent_name, shard_type, language, source_module, files, priority
+    Each item should include: id, agent_name, profile, round, shard_type, language, module_id, source_module, files, priority
 
 11. work-query - Query scan work items.
     Required: db_path
-    Optional: status, agent_name, source_module, language, shard_type, limit
+    Optional: status, agent_name, source_module, module_id, language, profile, round, shard_type, limit
 
 12. work-claim - Claim pending work items in priority order.
     Required: db_path
-    Optional: agent_name, language, limit
+    Optional: agent_name, language, profile, round, limit
     Marks returned items as running and increments attempts.
 
 13. work-complete - Mark one work item as success.
@@ -69,7 +69,20 @@ Commands:
 
 16. work-stats - Get work item status counts.
     Required: db_path
-    Optional: agent_name
+    Optional: agent_name, source_module, module_id, language, profile, round
+
+17. coverage-add - Add coverage ledger records after work item completion.
+    Required: db_path, coverage_items (JSON array string)
+    Each item should include: agent_name, work_item_id, profile, round, source_module/module_id, language, shard_type, files, coverage_status, findings_count.
+    coverage_status: complete, partial, blocked, shallow, expansion_needed
+
+18. coverage-query - Query coverage ledger records.
+    Required: db_path
+    Optional: agent_name, work_item_id, source_module, module_id, language, profile, round, shard_type, coverage_status, limit
+
+19. coverage-stats - Get coverage ledger status counts.
+    Required: db_path
+    Optional: agent_name, source_module, module_id, language, profile, round, shard_type, coverage_status
 
 Parameters:
 - db_path: Absolute path to the SQLite database file (e.g. {CONTEXT_DIR}/scan.db)
@@ -81,6 +94,7 @@ Parameters:
 - phase: Filter by phase (candidate/verified)
 - status: Filter by status (CONFIRMED/LIKELY/POSSIBLE/FALSE_POSITIVE)
 - source_module: Filter by module name
+- module_id: Filter by stable module ID
 - source_agent: Filter by source agent
 - language: Filter by language (c_cpp/python/go/lua/java)
 - analysis_kind: Filter by analysis kind (dataflow/authn/authz/crypto/config/secret/framework_misuse)
@@ -90,10 +104,15 @@ Parameters:
 - offset: Pagination offset
 - ids: Comma-separated list of vulnerability IDs to query
 - agent_name: Agent name for log command
+- profile: Scan profile (quick/standard/deep/paranoid)
+- round: Scan round number
+- work_item_id: Work item ID for coverage records
+- coverage_status: Coverage status for coverage-query
 - module_name: Module name for log command
 - message: Log message
 - item_count: Number of items processed (for log)
 - output: Output file path for export-json
 - work_items: JSON array of scan work items for work-add
+- coverage_items: JSON array of coverage ledger items for coverage-add
 - shard_type: Work item shard type (entrypoint_slice/sink_slice/module_sweep/expansion_slice/cross_module_slice)
 - finding_count: Number of findings produced by a completed work item

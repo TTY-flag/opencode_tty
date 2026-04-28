@@ -50,7 +50,8 @@ permission:
 2. **程序化生成两份汇总索引**: 调用 `report-generator` 工具，自动生成 `report_confirmed.md`（已确认漏洞）和 `report_unconfirmed.md`（待确认漏洞）
 3. **补充执行摘要**: 读取已确认报告骨架后添加面向管理层的执行摘要段落
 4. **添加审计索引**: 在汇总报告中列出 `details/{VULN_ID}.md`，方便审计人员逐个打开
-5. **添加修复建议**: 基于漏洞模式生成修复优先级建议
+5. **呈现覆盖账本摘要**: 确认汇总报告包含 `scan_coverage` 的覆盖状态分布，帮助审计人员判断扫描深度与残余缺口
+6. **添加修复建议**: 基于漏洞模式生成修复优先级建议
 
 ## 执行流程
 
@@ -78,6 +79,7 @@ report-generator db_path={DB_PATH} project_model_path={CONTEXT_DIR}/project_mode
 - 扫描摘要（严重性分布、验证状态分布）
 - Top 10 关键漏洞
 - 攻击面分析（从 project_model.json）
+- 覆盖账本摘要（从 scan_coverage）
 - **全量漏洞详情**（按 verified_severity 分组，每个漏洞含 ID、类型、CWE、位置、描述、置信度、数据流）
 - 模块漏洞分布交叉表
 - CWE 分布

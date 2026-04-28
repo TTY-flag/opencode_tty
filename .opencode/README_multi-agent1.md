@@ -109,6 +109,7 @@ flowchart TD
 | 调用图 | `{SCAN_OUTPUT}/.context/call_graph.json` | 风险相关稀疏调用图、数据流路径和未解析动态调用 |
 | 漏洞数据库 | `{SCAN_OUTPUT}/.context/scan.db` | 候选漏洞、验证结果、work item 队列、agent 日志 |
 | 扫描日志 | `{SCAN_OUTPUT}/.context/scan_log.json` | 各阶段状态、耗时、输出文件 |
+| 扫描深度配置 | `{PROJECT_ROOT}/.opencode/scan-profiles.json` | `quick` / `standard` / `deep` / `paranoid` 的轮数和补扫策略 |
 
 默认 `SCAN_OUTPUT` 为：
 
@@ -247,6 +248,9 @@ flowchart LR
   QUEUE --> CLAIM["vuln-db work-claim limit=1"]
   CLAIM --> WORKER["language-specific worker<br/>只处理一个 work item"]
   WORKER --> INSERT["vuln-db insert"]
+  WORKER --> COV["vuln-db coverage-add<br/>scan_coverage"]
+  COV --> GAP["coverage-stats / coverage-query<br/>找浅扫和缺口"]
+  GAP --> PLAN
   WORKER --> COMPLETE["vuln-db work-complete / work-fail"]
   COMPLETE --> CLAIM
 ```
@@ -262,6 +266,19 @@ flowchart LR
 | 扩展 | 需要更多上下文时返回 `EXPANSION_NEEDED`，由协调者生成新切片 |
 
 这对 GLM-5 这类模型尤其重要：协调者负责拆任务，worker 保持上下文小而深。
+
+## 扫描深度档位
+
+默认使用 `deep`，目的是降低 AI 单次运行不稳定带来的漏扫风险。可以在用户提示中指定 `quick`、`standard`、`deep` 或 `paranoid`。
+
+| profile | 轮数 | 行为 |
+| ------- | ---- | ---- |
+| `quick` | 1 | 只做一轮广覆盖 |
+| `standard` | 2 | 增加低覆盖补扫 |
+| `deep` | 4 | 增加 expansion、high-risk negative review、cross-module deepening |
+| `paranoid` | 5 | 对高风险空结果和不确定调用边做额外一致性检查 |
+
+每个 worker 都必须返回 `COVERAGE_LEDGER`，由 coordinator 写入 `scan_coverage`。如果发现 `expansion_needed`、`shallow`、`partial`，且尚未达到 `MAX_ROUNDS`，coordinator 会继续生成下一轮 work item。
 
 ## 多语言分发规则
 

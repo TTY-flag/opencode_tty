@@ -31,6 +31,8 @@ permission:
 | `SCAN_OUTPUT`  | 扫描输出目录       | `{PROJECT_ROOT}/scan-results`                              |
 | `CONTEXT_DIR`  | 上下文存储目录     | `{SCAN_OUTPUT}/.context`                                   |
 | `DB_PATH`      | 漏洞数据库路径     | `{CONTEXT_DIR}/scan.db`                                    |
+| `SCAN_PROFILE` | 扫描深度档位       | 用户指定；未指定时读取 `{PROJECT_ROOT}/.opencode/scan-profiles.json` 的 `default_profile` |
+| `MAX_ROUNDS`   | Scanner 最大轮数   | 由 `SCAN_PROFILE` 决定                                     |
 
 ## 核心职责
 
@@ -52,6 +54,7 @@ permission:
 | `scan.db` (SQLite)   | 所有 Agent（通过 `vuln-db` 工具） | 所有 Agent                             | 漏洞候选 + 验证结果 + Agent 日志 |
 | `project_model.json` | @architecture                     | 所有 Scanner、@verification、@reporter | 项目结构和高风险文件             |
 | `call_graph.json`    | @architecture                     | 所有 Scanner、@verification            | 函数调用关系图                   |
+| `scan-profiles.json` | harness                           | @orchestrator、Scanner Coordinator     | 扫描深度档位、轮数和补扫策略     |
 | `scan_log.json`      | @orchestrator                     | 用户/调试                              | Agent 调用日志和扫描统计         |
 
 ## 严格调用顺序（必须遵守）
@@ -69,6 +72,7 @@ permission:
 阶段 3（@dataflow-scanner 和 @security-auditor 并行）
     注意：两者必须在 @architecture 完全结束后才能启动
     注意：协调者根据模块 language 字段自动分发到对应语言工作者
+    注意：必须按 SCAN_PROFILE 执行多轮扫描和覆盖补扫
     ↓ 必须：两个 Agent 均完成，vuln-db stats 确认有候选漏洞入库
 阶段 4（@verification）
     ↓ 必须：vuln-db stats phase=verified 确认验证完成
@@ -95,6 +99,38 @@ permission:
   5. 有 CONFIRMED 漏洞但报告不完整时，**必须继续分析**未完成的漏洞
 - 若检查失败（阶段 2/3/4），**停止流程并向用户报告具体原因**，不得跳过继续执行
 - 阶段 3 中两个 Agent 可并行，但必须**等待两者都完成**才能进入阶段 4
+- 阶段 3 的“完成”不仅要求无 pending/running/failed work item，还要求 `vuln-db coverage-stats` 中不存在未处理的 `expansion_needed` / `shallow` / `partial` 记录；若 `SCAN_PROFILE.max_rounds` 尚未耗尽，必须继续补扫。
+
+## 扫描深度档位（让扫描更长但可控）
+
+扫描深度由 `{PROJECT_ROOT}/.opencode/scan-profiles.json` 控制。若用户没有显式指定，默认使用 `deep`。
+
+| profile | max_rounds | 用途 |
+| ------- | ---------- | ---- |
+| `quick` | 1 | 快速冒烟，只做广覆盖 |
+| `standard` | 2 | 常规扫描，增加一轮低覆盖补扫 |
+| `deep` | 4 | 默认正式漏洞挖掘，增加低覆盖补扫、高风险空结果复扫、跨模块深挖 |
+| `paranoid` | 5 | 最高深度，对高风险和不确定路径做一致性复查 |
+
+Orchestrator 必须把以下信息传给 `@dataflow-scanner` 和 `@security-auditor`：
+
+```text
+## 扫描深度
+- SCAN_PROFILE: [quick|standard|deep|paranoid]
+- MAX_ROUNDS: [来自 scan-profiles.json]
+- require_negative_evidence: [true/false]
+- rescan_high_risk_empty_modules: [true/false]
+- duplicate_high_risk_review: [true/false]
+```
+
+每轮结束后必须调用：
+
+```text
+vuln-db command=coverage-stats db_path={DB_PATH} agent_name=dataflow-scanner
+vuln-db command=coverage-stats db_path={DB_PATH} agent_name=security-auditor
+```
+
+只有在 work item 队列完成、覆盖账本没有待补扫项，或已经达到 `MAX_ROUNDS` 时，阶段 3 才能进入 verification。
 
 ## 断点续扫机制（重要）
 
@@ -182,19 +218,25 @@ CONTEXT_DIR = {SCAN_OUTPUT}/.context
 mkdir -p {CONTEXT_DIR}
 ```
 
-**步骤 3：断点续扫检测**
+**步骤 3：确定扫描深度**
+
+读取 `{PROJECT_ROOT}/.opencode/scan-profiles.json`。如果用户提示中包含 `quick`、`standard`、`deep` 或 `paranoid`，使用用户指定档位；否则使用文件中的 `default_profile`。
+
+将 `SCAN_PROFILE`、`MAX_ROUNDS` 和 profile 配置写入 `scan_log.json`，并在后续调用 scanner coordinator 时传递。
+
+**步骤 4：断点续扫检测**
 
 检查 `{CONTEXT_DIR}/scan_log.json` 是否存在：
 
-- **不存在** → 全新扫描，继续步骤 4 初始化上下文文件
+- **不存在** → 全新扫描，继续步骤 5 初始化上下文文件
 - **存在** → 读取 `scan_log.json`，判断上次扫描状态
   - `status = "success"` → 上次扫描已完成，提示用户并询问是否重新扫描
   - `status = "running"` → 上次扫描中途中断，进入**续扫模式**
     - 保留已有上下文文件（`project_model.json`、中间候选文件等）
-    - **不要重新初始化上下文文件**，直接跳到步骤 5
+    - **不要重新初始化上下文文件**，直接跳到步骤 6
     - 按照"断点续扫机制"中的判定规则确定从哪个阶段恢复
 
-**步骤 4：初始化数据库和上下文文件（仅全新扫描时执行）**
+**步骤 5：初始化数据库和上下文文件（仅全新扫描时执行）**
 
 首先初始化 SQLite 漏洞数据库：
 
@@ -206,11 +248,11 @@ vuln-db command=init db_path={CONTEXT_DIR}/scan.db
 
 | 文件            | 初始内容                                                                              |
 | --------------- | ------------------------------------------------------------------------------------- |
-| `scan_log.json` | `{"scan_id": "<UUID>", "start_time": "<ISO8601>", "status": "running", "agents": []}` |
+| `scan_log.json` | `{"scan_id": "<UUID>", "start_time": "<ISO8601>", "status": "running", "scan_profile": "<SCAN_PROFILE>", "max_rounds": <MAX_ROUNDS>, "agents": []}` |
 
 写入 `scan_log.json` 后，调用 `validate-json` 工具校验。校验失败时修复并重试。
 
-**步骤 5：检测 threat.md**
+**步骤 6：检测 threat.md**
 
 检查 `{PROJECT_ROOT}/threat.md` 是否存在：
 
@@ -227,7 +269,7 @@ options:
 - 用户选择"直接继续" → 在进度报告中标注"自主分析模式"，@architecture 将自主识别所有攻击面
 - 用户选择"暂停扫描" → 停止当前流程，提示用户调用 `@threat-analyst` 生成 threat.md 后再重新调用 `@orchestrator`
 
-**步骤 6：确定执行起点**
+**步骤 7：确定执行起点**
 
 - **全新扫描** → 从阶段 1 开始
 - **续扫模式** → 按照断点续扫判定规则，找到第一个未完成的阶段开始执行
@@ -320,6 +362,11 @@ options:
 - 上下文目录: {CONTEXT_DIR}
 - 数据库路径: {DB_PATH}
 
+## 扫描深度
+- SCAN_PROFILE: {SCAN_PROFILE}
+- MAX_ROUNDS: {MAX_ROUNDS}
+- profile 配置: [从 scan-profiles.json 读取的当前 profile 对象]
+
 ## 任务
 扫描数据流漏洞
 - C/C++ 模块: 内存安全、输入验证、注入
@@ -338,6 +385,11 @@ options:
 - 扫描输出目录: {SCAN_OUTPUT}
 - 上下文目录: {CONTEXT_DIR}
 - 数据库路径: {DB_PATH}
+
+## 扫描深度
+- SCAN_PROFILE: {SCAN_PROFILE}
+- MAX_ROUNDS: {MAX_ROUNDS}
+- profile 配置: [从 scan-profiles.json 读取的当前 profile 对象]
 
 ## 任务
 审计安全逻辑（认证授权、密码学）
@@ -364,7 +416,7 @@ options:
     └── 跨模块安全分析 → vuln-db insert
 ```
 
-**门控**：**必须等待两个 Agent 都完成**，调用 `vuln-db work-stats` 确认两个 Agent 的 work item 均完成，再调用 `vuln-db stats phase=candidate` 确认候选漏洞入库。没有候选漏洞但所有 work item 均完成时，也允许进入验证阶段并生成空报告。
+**门控**：**必须等待两个 Agent 都完成**，调用 `vuln-db work-stats` 确认两个 Agent 的 work item 均完成，再调用 `vuln-db coverage-stats` 确认覆盖账本没有未处理的 `expansion_needed` / `shallow` / `partial`，最后调用 `vuln-db stats phase=candidate` 确认候选漏洞入库。没有候选漏洞但所有 work item 均完成且高风险空结果已有 negative evidence 时，也允许进入验证阶段并生成空报告。
 
 ### 阶段 4: 漏洞验证
 
