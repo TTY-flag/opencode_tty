@@ -274,14 +274,16 @@ flowchart LR
 
 默认使用 `deep`，目的是降低 AI 单次运行不稳定带来的漏扫风险。可以在用户提示中指定 `quick`、`standard`、`deep` 或 `paranoid`。
 
-| profile | 轮数 | 行为 |
-| ------- | ---- | ---- |
-| `quick` | 1 | 只做一轮广覆盖 |
-| `standard` | 2 | 增加低覆盖补扫 |
-| `deep` | 4 | 增加 expansion、high-risk negative review、cross-module deepening |
-| `paranoid` | 5 | 对高风险空结果和不确定调用边做额外一致性检查 |
+| profile | 轮数 | 独立 pass | 行为 |
+| ------- | ---- | --------- | ---- |
+| `quick` | 1 | 1 | 只做一轮广覆盖 |
+| `standard` | 2 | 1 | 增加低覆盖补扫 |
+| `deep` | 4 | 高风险至少 2 个 pass | 高风险切片会从正向、反向或 negative review 视角复扫 |
+| `paranoid` | 5 | 高风险至少 3 个 pass | 增加 disagreement review，对冲突结论做一致性检查 |
 
 每个 worker 都必须返回 `COVERAGE_LEDGER`，由 coordinator 写入 `scan_coverage`。如果发现 `expansion_needed`、`shallow`、`partial`，且尚未达到 `MAX_ROUNDS`，coordinator 会继续生成下一轮 work item。
+
+重复 pass 会写入 `pass_id/pass_kind`。常见 `pass_kind` 包括 `primary`、`sink_to_source`、`negative_review`、`cross_module` 和 `disagreement_review`。它不是简单重复同一 prompt，而是让同一高风险切片从不同分析视角独立复核，候选漏洞取并集，后续由 verification/dedup 合并。
 
 Orchestrator 会先调用 `scan-profile-resolver`，把最终采用的配置写入 `{SCAN_OUTPUT}/.context/scan_profile.json`。后续 scanner 读取这个已解析文件，不再自己寻找原始 `scan-profiles.json`。如果目标项目没有复制 `scan-profiles.json`，会自动使用 harness 自带配置；仍找不到时使用内置 `deep` 兜底，并在 `scan_profile.json.warnings` 中记录原因。
 

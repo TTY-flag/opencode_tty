@@ -324,7 +324,14 @@ function validateScanProfile(data: unknown): Diagnostics {
   const config = requireObject(root.profile_config, "$.profile_config", errors)
   if (config) {
     if (typeof config.max_rounds !== "number" || config.max_rounds < 1) errors.push("$.profile_config.max_rounds must be a number >= 1")
+    if (typeof config.min_independent_passes !== "number" || config.min_independent_passes < 1) {
+      errors.push("$.profile_config.min_independent_passes must be a number >= 1")
+    }
+    if (typeof config.high_risk_min_passes !== "number" || config.high_risk_min_passes < 1) {
+      errors.push("$.profile_config.high_risk_min_passes must be a number >= 1")
+    }
     if (typeof config.max_expansions_per_module !== "number") errors.push("$.profile_config.max_expansions_per_module must be a number")
+    if (config.repeat_pass_kinds !== undefined) stringArray(config.repeat_pass_kinds, "$.profile_config.repeat_pass_kinds", errors)
     if (typeof config.rescan_high_risk_empty_modules !== "boolean") {
       errors.push("$.profile_config.rescan_high_risk_empty_modules must be a boolean")
     }

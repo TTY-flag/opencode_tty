@@ -101,6 +101,7 @@ permission:
 - 若检查失败（阶段 2/3/4），**停止流程并向用户报告具体原因**，不得跳过继续执行
 - 阶段 3 中两个 Agent 可并行，但必须**等待两者都完成**才能进入阶段 4
 - 阶段 3 的“完成”不仅要求无 pending/running/failed work item，还要求 `vuln-db coverage-stats` 中不存在未处理的 `expansion_needed` / `shallow` / `partial` 记录；若 `MAX_ROUNDS` 尚未耗尽，必须继续补扫。
+- 对 `deep` / `paranoid`，阶段 3 还要求高风险模块满足 `high_risk_min_passes`；也就是说，即使第一遍 coverage 为 `complete`，仍要用不同 `pass_kind` 做独立复扫，以降低模型随机性带来的漏报。
 
 ## 扫描深度档位（让扫描更长但可控）
 
@@ -113,12 +114,12 @@ permission:
 3. harness 自带 `.opencode/scan-profiles.json`
 4. 内置默认配置 `deep`
 
-| profile | max_rounds | 用途 |
-| ------- | ---------- | ---- |
-| `quick` | 1 | 快速冒烟，只做广覆盖 |
-| `standard` | 2 | 常规扫描，增加一轮低覆盖补扫 |
-| `deep` | 4 | 默认正式漏洞挖掘，增加低覆盖补扫、高风险空结果复扫、跨模块深挖 |
-| `paranoid` | 5 | 最高深度，对高风险和不确定路径做一致性复查 |
+| profile | max_rounds | min/high-risk passes | 用途 |
+| ------- | ---------- | -------------------- | ---- |
+| `quick` | 1 | 1 / 1 | 快速冒烟，只做广覆盖 |
+| `standard` | 2 | 1 / 1 | 常规扫描，增加一轮低覆盖补扫 |
+| `deep` | 4 | 2 / 2 | 默认正式漏洞挖掘，高风险切片至少两种视角独立复扫 |
+| `paranoid` | 5 | 2 / 3 | 最高深度，高风险切片至少三种视角，并做差异一致性检查 |
 
 Orchestrator 必须把以下信息传给 `@dataflow-scanner` 和 `@security-auditor`：
 
@@ -129,6 +130,9 @@ Orchestrator 必须把以下信息传给 `@dataflow-scanner` 和 `@security-audi
 - require_negative_evidence: [true/false]
 - rescan_high_risk_empty_modules: [true/false]
 - duplicate_high_risk_review: [true/false]
+- min_independent_passes: [number]
+- high_risk_min_passes: [number]
+- repeat_pass_kinds: [primary, sink_to_source, negative_review, cross_module, disagreement_review]
 - SCAN_PROFILE_PATH: {CONTEXT_DIR}/scan_profile.json
 ```
 
@@ -139,7 +143,21 @@ vuln-db command=coverage-stats db_path={DB_PATH} agent_name=dataflow-scanner
 vuln-db command=coverage-stats db_path={DB_PATH} agent_name=security-auditor
 ```
 
-只有在 work item 队列完成、覆盖账本没有待补扫项，或已经达到 `MAX_ROUNDS` 时，阶段 3 才能进入 verification。
+只有在 work item 队列完成、覆盖账本没有待补扫项、重复 pass 门槛满足，或已经达到 `MAX_ROUNDS` 且记录剩余缺口时，阶段 3 才能进入 verification。
+
+### 重复独立 pass 规则
+
+为了解决同一项目多次扫描结果差异大的问题，Coordinator 必须把“覆盖补扫”和“随机性复扫”分开处理：
+
+| pass_kind | 视角 | 触发 |
+| --------- | ---- | ---- |
+| `primary` | 入口点到 sink 的正向扫描 | 所有初始 work item |
+| `sink_to_source` | 从高危 sink 反向追 source / guard / sanitizer | `deep` / `paranoid` 的高风险模块和关键 sink |
+| `negative_review` | 高风险空结果复查，要求给出反证 | 高风险模块 0 findings 或 require_negative_evidence=true |
+| `cross_module` | 跨模块/跨语言调用链复查 | 跨模块边、unresolved call_graph、worker 输出跨模块线索 |
+| `disagreement_review` | 对不同 pass 结果不一致处复查 | `paranoid` 或候选/反证互相冲突 |
+
+`deep` 下高风险模块至少要有 2 个不同 `pass_kind` 的成功 coverage 记录；`paranoid` 下至少 3 个。候选漏洞取并集，后续由 verification/dedup 去重和降误报。
 
 ## 断点续扫机制（重要）
 
@@ -388,6 +406,7 @@ options:
 - MAX_ROUNDS: {MAX_ROUNDS}
 - SCAN_PROFILE_PATH: {CONTEXT_DIR}/scan_profile.json
 - profile 配置: [从 {CONTEXT_DIR}/scan_profile.json 读取的 profile_config 对象]
+- 重复 pass: min_independent_passes / high_risk_min_passes / repeat_pass_kinds
 
 ## 任务
 扫描数据流漏洞
@@ -413,6 +432,7 @@ options:
 - MAX_ROUNDS: {MAX_ROUNDS}
 - SCAN_PROFILE_PATH: {CONTEXT_DIR}/scan_profile.json
 - profile 配置: [从 {CONTEXT_DIR}/scan_profile.json 读取的 profile_config 对象]
+- 重复 pass: min_independent_passes / high_risk_min_passes / repeat_pass_kinds
 
 ## 任务
 审计安全逻辑（认证授权、密码学）
@@ -439,7 +459,7 @@ options:
     └── 跨模块安全分析 → vuln-db insert
 ```
 
-**门控**：**必须等待两个 Agent 都完成**，调用 `vuln-db work-stats` 确认两个 Agent 的 work item 均完成，再调用 `vuln-db coverage-stats` 确认覆盖账本没有未处理的 `expansion_needed` / `shallow` / `partial`，最后调用 `vuln-db stats phase=candidate` 确认候选漏洞入库。没有候选漏洞但所有 work item 均完成且高风险空结果已有 negative evidence 时，也允许进入验证阶段并生成空报告。
+**门控**：**必须等待两个 Agent 都完成**，调用 `vuln-db work-stats` 确认两个 Agent 的 work item 均完成，再调用 `vuln-db coverage-stats` 确认覆盖账本没有未处理的 `expansion_needed` / `shallow` / `partial`，并检查高风险模块是否满足 `high_risk_min_passes` 个不同 `pass_kind`。最后调用 `vuln-db stats phase=candidate` 确认候选漏洞入库。没有候选漏洞但所有 work item 均完成、重复 pass 达标且高风险空结果已有 negative evidence 时，也允许进入验证阶段并生成空报告。
 
 ### 阶段 4: 漏洞验证
 

@@ -116,6 +116,10 @@ Work item JSON 示例：
   "id": "df-go-auth-entry-001",
   "scan_id": "scan-001",
   "agent_name": "dataflow-scanner",
+  "profile": "deep",
+  "round": 1,
+  "pass_id": 1,
+  "pass_kind": "primary",
   "shard_type": "entrypoint_slice",
   "language": "go",
   "framework": "gin",
@@ -139,7 +143,7 @@ Work item JSON 示例：
 
 ## JSON 格式规范（必须遵守）
 
-以下规范适用于仍在使用的 JSON 文件（`project_model.json`、`call_graph.json`、`scan_log.json`）。
+以下规范适用于仍在使用的 JSON 文件（`project_model.json`、`call_graph.json`、`scan_profile.json`、`scan_log.json`）。
 
 ### 写入规则
 
@@ -427,7 +431,10 @@ Work item JSON 示例：
   "max_rounds": 4,
   "profile_config": {
     "max_rounds": 4,
+    "min_independent_passes": 2,
+    "high_risk_min_passes": 2,
     "max_expansions_per_module": 3,
+    "repeat_pass_kinds": ["primary", "sink_to_source", "negative_review", "cross_module"],
     "rescan_high_risk_empty_modules": true,
     "require_negative_evidence": true,
     "duplicate_high_risk_review": true,
@@ -455,7 +462,10 @@ Work item JSON 示例：
   "scan_profile_path": "{CONTEXT_DIR}/scan_profile.json",
   "max_rounds": 4,
   "profile_config": {
+    "min_independent_passes": 2,
+    "high_risk_min_passes": 2,
     "max_expansions_per_module": 3,
+    "repeat_pass_kinds": ["primary", "sink_to_source", "negative_review", "cross_module"],
     "rescan_high_risk_empty_modules": true,
     "require_negative_evidence": true,
     "duplicate_high_risk_review": true

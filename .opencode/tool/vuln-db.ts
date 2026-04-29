@@ -73,6 +73,8 @@ CREATE TABLE IF NOT EXISTS scan_work_items (
     agent_name TEXT NOT NULL,
     profile TEXT,
     round INTEGER DEFAULT 1,
+    pass_id INTEGER DEFAULT 1,
+    pass_kind TEXT DEFAULT 'primary',
     shard_type TEXT NOT NULL
         CHECK(shard_type IN ('entrypoint_slice','sink_slice','module_sweep','expansion_slice','cross_module_slice')),
     language TEXT,
@@ -103,6 +105,8 @@ CREATE TABLE IF NOT EXISTS scan_coverage (
     work_item_id TEXT,
     profile TEXT,
     round INTEGER DEFAULT 1,
+    pass_id INTEGER DEFAULT 1,
+    pass_kind TEXT DEFAULT 'primary',
     source_module TEXT,
     module_id TEXT,
     language TEXT,
@@ -134,12 +138,14 @@ CREATE INDEX IF NOT EXISTS idx_work_agent ON scan_work_items(agent_name);
 CREATE INDEX IF NOT EXISTS idx_work_module ON scan_work_items(source_module);
 CREATE INDEX IF NOT EXISTS idx_work_language ON scan_work_items(language);
 CREATE INDEX IF NOT EXISTS idx_work_priority ON scan_work_items(priority);
+CREATE INDEX IF NOT EXISTS idx_work_pass ON scan_work_items(pass_id, pass_kind);
 CREATE INDEX IF NOT EXISTS idx_coverage_agent ON scan_coverage(agent_name);
 CREATE INDEX IF NOT EXISTS idx_coverage_work_item ON scan_coverage(work_item_id);
 CREATE INDEX IF NOT EXISTS idx_coverage_module ON scan_coverage(source_module);
 CREATE INDEX IF NOT EXISTS idx_coverage_module_id ON scan_coverage(module_id);
 CREATE INDEX IF NOT EXISTS idx_coverage_status ON scan_coverage(coverage_status);
 CREATE INDEX IF NOT EXISTS idx_coverage_round ON scan_coverage(round);
+CREATE INDEX IF NOT EXISTS idx_coverage_pass ON scan_coverage(pass_id, pass_kind);
 `
 
 function openDb(dbPath: string): Database {
@@ -164,7 +170,14 @@ const EXTRA_COLUMNS = [
 const WORK_ITEM_EXTRA_COLUMNS = [
   ["profile", "TEXT"],
   ["round", "INTEGER DEFAULT 1"],
+  ["pass_id", "INTEGER DEFAULT 1"],
+  ["pass_kind", "TEXT DEFAULT 'primary'"],
   ["module_id", "TEXT"],
+] as const
+
+const COVERAGE_EXTRA_COLUMNS = [
+  ["pass_id", "INTEGER DEFAULT 1"],
+  ["pass_kind", "TEXT DEFAULT 'primary'"],
 ] as const
 
 function migrate(db: Database) {
@@ -183,6 +196,7 @@ function migrate(db: Database) {
 
   ensureColumns("vulnerabilities", EXTRA_COLUMNS)
   ensureColumns("scan_work_items", WORK_ITEM_EXTRA_COLUMNS)
+  ensureColumns("scan_coverage", COVERAGE_EXTRA_COLUMNS)
 }
 
 const SEVERITY_ORDER: Record<string, number> = {
@@ -253,6 +267,8 @@ interface WorkItem {
   agent_name?: string
   profile?: string | null
   round?: number | null
+  pass_id?: number | null
+  pass_kind?: string | null
   shard_type?: string
   language?: string | null
   framework?: string | string[] | null
@@ -274,6 +290,8 @@ interface CoverageItem {
   work_item_id?: string | null
   profile?: string | null
   round?: number | null
+  pass_id?: number | null
+  pass_kind?: string | null
   source_module?: string | null
   module_id?: string | null
   language?: string | null
@@ -345,6 +363,8 @@ CREATE INDEX IF NOT EXISTS idx_vuln_language ON vulnerabilities(language);
 CREATE INDEX IF NOT EXISTS idx_vuln_analysis_kind ON vulnerabilities(analysis_kind);
 CREATE INDEX IF NOT EXISTS idx_work_module_id ON scan_work_items(module_id);
 CREATE INDEX IF NOT EXISTS idx_work_round ON scan_work_items(round);
+CREATE INDEX IF NOT EXISTS idx_work_pass ON scan_work_items(pass_id, pass_kind);
+CREATE INDEX IF NOT EXISTS idx_coverage_pass ON scan_coverage(pass_id, pass_kind);
 `)
     return `Database initialized: ${dbPath}\nTables: vulnerabilities, scan_work_items, scan_coverage, scan_metadata, agent_log`
   } finally {
@@ -685,10 +705,10 @@ function handleWorkAdd(db: Database, itemsJson: string): string {
 
   const stmt = db.prepare(`
     INSERT OR IGNORE INTO scan_work_items (
-      id, scan_id, agent_name, profile, round, shard_type, language, framework, module_id, source_module,
+      id, scan_id, agent_name, profile, round, pass_id, pass_kind, shard_type, language, framework, module_id, source_module,
       focus, entrypoint, sink, files_json, context_json, priority
     ) VALUES (
-      $id, $scan_id, $agent_name, $profile, $round, $shard_type, $language, $framework, $module_id, $source_module,
+      $id, $scan_id, $agent_name, $profile, $round, $pass_id, $pass_kind, $shard_type, $language, $framework, $module_id, $source_module,
       $focus, $entrypoint, $sink, $files_json, $context_json, $priority
     )
   `)
@@ -704,6 +724,8 @@ function handleWorkAdd(db: Database, itemsJson: string): string {
         $agent_name: item.agent_name ?? "scanner",
         $profile: item.profile ?? null,
         $round: item.round ?? 1,
+        $pass_id: item.pass_id ?? 1,
+        $pass_kind: item.pass_kind ?? "primary",
         $shard_type: item.shard_type ?? "module_sweep",
         $language: item.language ?? null,
         $framework: Array.isArray(item.framework) ? item.framework.join(",") : item.framework ?? null,
@@ -756,6 +778,14 @@ function handleWorkQuery(db: Database, args: Record<string, unknown>): string {
     conditions.push("round = $round")
     params.$round = args.round
   }
+  if (args.pass_id) {
+    conditions.push("pass_id = $pass_id")
+    params.$pass_id = args.pass_id
+  }
+  if (args.pass_kind) {
+    conditions.push("pass_kind = $pass_kind")
+    params.$pass_kind = args.pass_kind
+  }
   if (args.shard_type) {
     conditions.push("shard_type = $shard_type")
     params.$shard_type = args.shard_type
@@ -788,6 +818,14 @@ function handleWorkClaim(db: Database, args: Record<string, unknown>): string {
   if (args.round) {
     conditions.push("round = $round")
     params.$round = args.round
+  }
+  if (args.pass_id) {
+    conditions.push("pass_id = $pass_id")
+    params.$pass_id = args.pass_id
+  }
+  if (args.pass_kind) {
+    conditions.push("pass_kind = $pass_kind")
+    params.$pass_kind = args.pass_kind
   }
 
   const rows = db
@@ -854,6 +892,14 @@ function handleWorkStats(db: Database, args: Record<string, unknown>): string {
     conditions.push("round = $round")
     params.$round = args.round
   }
+  if (args.pass_id) {
+    conditions.push("pass_id = $pass_id")
+    params.$pass_id = args.pass_id
+  }
+  if (args.pass_kind) {
+    conditions.push("pass_kind = $pass_kind")
+    params.$pass_kind = args.pass_kind
+  }
   if (args.source_module) {
     conditions.push("source_module = $source_module")
     params.$source_module = args.source_module
@@ -876,6 +922,14 @@ function handleWorkStats(db: Database, args: Record<string, unknown>): string {
   const byRound = db
     .prepare(`SELECT round, status, COUNT(*) as cnt FROM scan_work_items ${where} GROUP BY round, status ORDER BY round, status`)
     .all(params) as Array<{ round: number | null; status: string; cnt: number }>
+  const byPass = db
+    .prepare(
+      `SELECT pass_id, pass_kind, status, COUNT(*) as cnt
+       FROM scan_work_items ${where}
+       GROUP BY pass_id, pass_kind, status
+       ORDER BY pass_id, pass_kind, status`,
+    )
+    .all(params) as Array<{ pass_id: number | null; pass_kind: string | null; status: string; cnt: number }>
 
   const lines = ["Work items by status:"]
   for (const row of rows) lines.push(`  ${row.status}: ${row.cnt}`)
@@ -883,6 +937,10 @@ function handleWorkStats(db: Database, args: Record<string, unknown>): string {
   for (const row of byLanguage) lines.push(`  ${row.language ?? "(none)"} / ${row.status}: ${row.cnt}`)
   lines.push("", "Work items by round/status:")
   for (const row of byRound) lines.push(`  round ${row.round ?? "?"} / ${row.status}: ${row.cnt}`)
+  lines.push("", "Work items by pass/status:")
+  for (const row of byPass) {
+    lines.push(`  pass ${row.pass_id ?? "?"} ${row.pass_kind ?? "(none)"} / ${row.status}: ${row.cnt}`)
+  }
   return lines.join("\n")
 }
 
@@ -921,12 +979,12 @@ function handleCoverageAdd(db: Database, itemsJson: string): string {
 
   const stmt = db.prepare(`
     INSERT INTO scan_coverage (
-      scan_id, agent_name, work_item_id, profile, round, source_module, module_id,
+      scan_id, agent_name, work_item_id, profile, round, pass_id, pass_kind, source_module, module_id,
       language, shard_type, files_json, entrypoints_json, sinks_json, nodes_json,
       edges_json, data_flows_json, coverage_status, findings_count,
       negative_evidence, expansion_request_json, notes
     ) VALUES (
-      $scan_id, $agent_name, $work_item_id, $profile, $round, $source_module, $module_id,
+      $scan_id, $agent_name, $work_item_id, $profile, $round, $pass_id, $pass_kind, $source_module, $module_id,
       $language, $shard_type, $files_json, $entrypoints_json, $sinks_json, $nodes_json,
       $edges_json, $data_flows_json, $coverage_status, $findings_count,
       $negative_evidence, $expansion_request_json, $notes
@@ -943,6 +1001,8 @@ function handleCoverageAdd(db: Database, itemsJson: string): string {
         $work_item_id: item.work_item_id ?? null,
         $profile: item.profile ?? null,
         $round: item.round ?? 1,
+        $pass_id: item.pass_id ?? 1,
+        $pass_kind: item.pass_kind ?? "primary",
         $source_module: item.source_module ?? null,
         $module_id: item.module_id ?? null,
         $language: item.language ?? null,
@@ -1007,6 +1067,14 @@ function handleCoverageQuery(db: Database, args: Record<string, unknown>): strin
     conditions.push("round = $round")
     params.$round = args.round
   }
+  if (args.pass_id) {
+    conditions.push("pass_id = $pass_id")
+    params.$pass_id = args.pass_id
+  }
+  if (args.pass_kind) {
+    conditions.push("pass_kind = $pass_kind")
+    params.$pass_kind = args.pass_kind
+  }
 
   let sql = `SELECT * FROM scan_coverage WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC, id DESC`
   if (args.limit) sql += ` LIMIT ${Number(args.limit)}`
@@ -1030,6 +1098,14 @@ function handleCoverageStats(db: Database, args: Record<string, unknown>): strin
   if (args.round) {
     conditions.push("round = $round")
     params.$round = args.round
+  }
+  if (args.pass_id) {
+    conditions.push("pass_id = $pass_id")
+    params.$pass_id = args.pass_id
+  }
+  if (args.pass_kind) {
+    conditions.push("pass_kind = $pass_kind")
+    params.$pass_kind = args.pass_kind
   }
   if (args.source_module) {
     conditions.push("source_module = $source_module")
@@ -1057,14 +1133,32 @@ function handleCoverageStats(db: Database, args: Record<string, unknown>): strin
     .prepare(`SELECT coverage_status, COUNT(*) as cnt FROM scan_coverage ${where} GROUP BY coverage_status ORDER BY coverage_status`)
     .all(params) as Array<{ coverage_status: string; cnt: number }>
   const byAgent = db
-    .prepare(`SELECT agent_name, coverage_status, COUNT(*) as cnt FROM scan_coverage ${where} GROUP BY agent_name, coverage_status ORDER BY agent_name, coverage_status`)
+    .prepare(
+      `SELECT agent_name, coverage_status, COUNT(*) as cnt
+       FROM scan_coverage ${where}
+       GROUP BY agent_name, coverage_status
+       ORDER BY agent_name, coverage_status`,
+    )
     .all(params) as Array<{ agent_name: string; coverage_status: string; cnt: number }>
   const byModule = db
-    .prepare(`SELECT COALESCE(module_id, source_module, '(none)') as module_key, coverage_status, COUNT(*) as cnt FROM scan_coverage ${where} GROUP BY module_key, coverage_status ORDER BY module_key, coverage_status`)
+    .prepare(
+      `SELECT COALESCE(module_id, source_module, '(none)') as module_key, coverage_status, COUNT(*) as cnt
+       FROM scan_coverage ${where}
+       GROUP BY module_key, coverage_status
+       ORDER BY module_key, coverage_status`,
+    )
     .all(params) as Array<{ module_key: string; coverage_status: string; cnt: number }>
   const byRound = db
     .prepare(`SELECT round, coverage_status, COUNT(*) as cnt FROM scan_coverage ${where} GROUP BY round, coverage_status ORDER BY round, coverage_status`)
     .all(params) as Array<{ round: number | null; coverage_status: string; cnt: number }>
+  const byPass = db
+    .prepare(
+      `SELECT pass_id, pass_kind, coverage_status, COUNT(*) as cnt
+       FROM scan_coverage ${where}
+       GROUP BY pass_id, pass_kind, coverage_status
+       ORDER BY pass_id, pass_kind, coverage_status`,
+    )
+    .all(params) as Array<{ pass_id: number | null; pass_kind: string | null; coverage_status: string; cnt: number }>
 
   const lines = ["Coverage by status:"]
   for (const row of byStatus) lines.push(`  ${row.coverage_status}: ${row.cnt}`)
@@ -1074,6 +1168,10 @@ function handleCoverageStats(db: Database, args: Record<string, unknown>): strin
   for (const row of byModule) lines.push(`  ${row.module_key} / ${row.coverage_status}: ${row.cnt}`)
   lines.push("", "Coverage by round/status:")
   for (const row of byRound) lines.push(`  round ${row.round ?? "?"} / ${row.coverage_status}: ${row.cnt}`)
+  lines.push("", "Coverage by pass/status:")
+  for (const row of byPass) {
+    lines.push(`  pass ${row.pass_id ?? "?"} ${row.pass_kind ?? "(none)"} / ${row.coverage_status}: ${row.cnt}`)
+  }
 
   return lines.join("\n")
 }
@@ -1124,6 +1222,11 @@ export default tool({
     agent_name: tool.schema.string().optional().describe("Agent name (for log)"),
     profile: tool.schema.string().optional().describe("Scan profile (quick, standard, deep, paranoid)"),
     round: tool.schema.number().optional().describe("Scan round number"),
+    pass_id: tool.schema.number().optional().describe("Independent scan pass number"),
+    pass_kind: tool.schema
+      .string()
+      .optional()
+      .describe("Independent pass kind: primary, sink_to_source, negative_review, cross_module, disagreement_review"),
     work_item_id: tool.schema.string().optional().describe("Work item ID for coverage records"),
     coverage_status: tool.schema.string().optional().describe("Coverage status: complete, partial, blocked, shallow, expansion_needed"),
     module_name: tool.schema.string().optional().describe("Module name (for log)"),

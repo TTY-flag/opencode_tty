@@ -71,6 +71,7 @@ interface ProjectModel {
 
 interface CoverageCount {
   agent_name: string
+  pass_kind: string | null
   coverage_status: string
   cnt: number
 }
@@ -382,10 +383,10 @@ function buildSingleReport(opts: {
   md.push(`## 3. 覆盖账本摘要`)
   md.push("")
   if (opts.coverageCounts.length > 0) {
-    md.push(`| Agent | 覆盖状态 | 数量 |`)
-    md.push(`|-------|----------|------|`)
+    md.push(`| Agent | Pass | 覆盖状态 | 数量 |`)
+    md.push(`|-------|------|----------|------|`)
     for (const row of opts.coverageCounts) {
-      md.push(`| ${row.agent_name} | ${row.coverage_status} | ${row.cnt} |`)
+      md.push(`| ${row.agent_name} | ${row.pass_kind ?? "primary"} | ${row.coverage_status} | ${row.cnt} |`)
     }
   } else {
     md.push(`未找到覆盖账本数据。`)
@@ -491,14 +492,26 @@ export default tool({
         try {
           return db
             .prepare(
-              `SELECT agent_name, coverage_status, COUNT(*) as cnt
+              `SELECT agent_name, pass_kind, coverage_status, COUNT(*) as cnt
              FROM scan_coverage
-             GROUP BY agent_name, coverage_status
-             ORDER BY agent_name, coverage_status`,
+             GROUP BY agent_name, pass_kind, coverage_status
+             ORDER BY agent_name, pass_kind, coverage_status`,
             )
             .all() as CoverageCount[]
         } catch {
-          return []
+          try {
+            const rows = db
+              .prepare(
+                `SELECT agent_name, coverage_status, COUNT(*) as cnt
+             FROM scan_coverage
+             GROUP BY agent_name, coverage_status
+             ORDER BY agent_name, coverage_status`,
+              )
+              .all() as Array<{ agent_name: string; coverage_status: string; cnt: number }>
+            return rows.map((row) => ({ ...row, pass_kind: null }))
+          } catch {
+            return []
+          }
         }
       }
 

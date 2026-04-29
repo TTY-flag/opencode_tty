@@ -245,6 +245,8 @@ vuln-db command=insert db_path={DB_PATH} vulnerabilities='[
 ```text
 COVERAGE_LEDGER:
   work_item_id: [当前 work item id]
+  pass_id: [work item pass_id]
+  pass_kind: [primary|sink_to_source|negative_review|cross_module|disagreement_review]
   coverage_status: complete|partial|blocked|shallow|expansion_needed
   files_scanned: [相对路径数组]
   entrypoints_checked: [入口点 ID 或 file:line]

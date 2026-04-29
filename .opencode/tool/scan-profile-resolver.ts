@@ -8,7 +8,10 @@ import { fileURLToPath } from "node:url"
 
 interface ProfileConfig {
   max_rounds: number
+  min_independent_passes: number
+  high_risk_min_passes: number
   max_expansions_per_module: number
+  repeat_pass_kinds: string[]
   rescan_high_risk_empty_modules: boolean
   require_negative_evidence: boolean
   duplicate_high_risk_review: boolean
@@ -26,7 +29,10 @@ const BUILTIN_PROFILES: ProfilesFile = {
   profiles: {
     quick: {
       max_rounds: 1,
+      min_independent_passes: 1,
+      high_risk_min_passes: 1,
       max_expansions_per_module: 0,
+      repeat_pass_kinds: ["primary"],
       rescan_high_risk_empty_modules: false,
       require_negative_evidence: false,
       duplicate_high_risk_review: false,
@@ -34,7 +40,10 @@ const BUILTIN_PROFILES: ProfilesFile = {
     },
     standard: {
       max_rounds: 2,
+      min_independent_passes: 1,
+      high_risk_min_passes: 1,
       max_expansions_per_module: 1,
+      repeat_pass_kinds: ["primary", "sink_to_source"],
       rescan_high_risk_empty_modules: true,
       require_negative_evidence: true,
       duplicate_high_risk_review: false,
@@ -42,7 +51,10 @@ const BUILTIN_PROFILES: ProfilesFile = {
     },
     deep: {
       max_rounds: 4,
+      min_independent_passes: 2,
+      high_risk_min_passes: 2,
       max_expansions_per_module: 3,
+      repeat_pass_kinds: ["primary", "sink_to_source", "negative_review", "cross_module"],
       rescan_high_risk_empty_modules: true,
       require_negative_evidence: true,
       duplicate_high_risk_review: true,
@@ -53,7 +65,16 @@ const BUILTIN_PROFILES: ProfilesFile = {
     },
     paranoid: {
       max_rounds: 5,
+      min_independent_passes: 2,
+      high_risk_min_passes: 3,
       max_expansions_per_module: 5,
+      repeat_pass_kinds: [
+        "primary",
+        "sink_to_source",
+        "negative_review",
+        "cross_module",
+        "disagreement_review",
+      ],
       rescan_high_risk_empty_modules: true,
       require_negative_evidence: true,
       duplicate_high_risk_review: true,
@@ -70,8 +91,8 @@ const BUILTIN_PROFILES: ProfilesFile = {
       "unresolved call graph, missing source/sink evidence",
     ].join(" "),
     "3": [
-      "high-risk negative review: Critical/High modules with no findings must produce negative evidence",
-      "or new expansion slices",
+      "independent repeat pass: high-risk modules are rescanned from a different viewpoint",
+      "even if coverage is complete",
     ].join(" "),
     "4": "cross-module deepening: data/security flows across module and language boundaries",
     "5": "consistency review: duplicate high-risk review and disagreement checks",
@@ -110,6 +131,22 @@ function isProfilesFile(value: unknown): value is ProfilesFile {
   return true
 }
 
+function normalizeProfile(name: string, config: ProfileConfig): ProfileConfig {
+  const fallback = BUILTIN_PROFILES.profiles[name] ?? BUILTIN_PROFILES.profiles.deep
+  const hasRepeatPassKinds =
+    Array.isArray(config.repeat_pass_kinds) && config.repeat_pass_kinds.length > 0
+  const repeatPassKinds = hasRepeatPassKinds
+    ? config.repeat_pass_kinds
+    : fallback.repeat_pass_kinds
+  return {
+    ...fallback,
+    ...config,
+    min_independent_passes: config.min_independent_passes ?? fallback.min_independent_passes,
+    high_risk_min_passes: config.high_risk_min_passes ?? fallback.high_risk_min_passes,
+    repeat_pass_kinds: repeatPassKinds,
+  }
+}
+
 async function loadProfiles(paths: string[]): Promise<{ profiles: ProfilesFile; source: string; warnings: string[] }> {
   const warnings: string[] = []
   for (const path of paths) {
@@ -138,22 +175,30 @@ function selectProfile(
   const warnings: string[] = []
   const normalizedRequested = requested?.trim().toLowerCase()
   if (normalizedRequested && profiles.profiles[normalizedRequested]) {
-    return { name: normalizedRequested, config: profiles.profiles[normalizedRequested], warnings }
+    return {
+      name: normalizedRequested,
+      config: normalizeProfile(normalizedRequested, profiles.profiles[normalizedRequested]),
+      warnings,
+    }
   }
   if (normalizedRequested) {
     warnings.push(`requested scan_profile "${requested}" was not found; using configured default`)
   }
   if (profiles.profiles[profiles.default_profile]) {
-    return { name: profiles.default_profile, config: profiles.profiles[profiles.default_profile], warnings }
+    return {
+      name: profiles.default_profile,
+      config: normalizeProfile(profiles.default_profile, profiles.profiles[profiles.default_profile]),
+      warnings,
+    }
   }
   if (profiles.profiles.deep) {
     warnings.push(`default_profile "${profiles.default_profile}" was not found; using deep`)
-    return { name: "deep", config: profiles.profiles.deep, warnings }
+    return { name: "deep", config: normalizeProfile("deep", profiles.profiles.deep), warnings }
   }
   const first = Object.keys(profiles.profiles)[0]
   if (first) {
     warnings.push(`deep profile was not found; using first available profile "${first}"`)
-    return { name: first, config: profiles.profiles[first], warnings }
+    return { name: first, config: normalizeProfile(first, profiles.profiles[first]), warnings }
   }
   warnings.push("no valid profiles were found; using built-in deep")
   return { name: "deep", config: BUILTIN_PROFILES.profiles.deep, warnings }

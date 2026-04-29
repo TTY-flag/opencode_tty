@@ -44,15 +44,15 @@ Commands:
 
 10. work-add - Add scan work items for large-project sharded scanning.
     Required: db_path, work_items (JSON array string)
-    Each item should include: id, agent_name, profile, round, shard_type, language, module_id, source_module, files, priority
+    Each item should include: id, agent_name, profile, round, pass_id, pass_kind, shard_type, language, module_id, source_module, files, priority
 
 11. work-query - Query scan work items.
     Required: db_path
-    Optional: status, agent_name, source_module, module_id, language, profile, round, shard_type, limit
+    Optional: status, agent_name, source_module, module_id, language, profile, round, pass_id, pass_kind, shard_type, limit
 
 12. work-claim - Claim pending work items in priority order.
     Required: db_path
-    Optional: agent_name, language, profile, round, limit
+    Optional: agent_name, language, profile, round, pass_id, pass_kind, limit
     Marks returned items as running and increments attempts.
 
 13. work-complete - Mark one work item as success.
@@ -69,20 +69,20 @@ Commands:
 
 16. work-stats - Get work item status counts.
     Required: db_path
-    Optional: agent_name, source_module, module_id, language, profile, round
+    Optional: agent_name, source_module, module_id, language, profile, round, pass_id, pass_kind
 
 17. coverage-add - Add coverage ledger records after work item completion.
     Required: db_path, coverage_items (JSON array string)
-    Each item should include: agent_name, work_item_id, profile, round, source_module/module_id, language, shard_type, files, coverage_status, findings_count.
+    Each item should include: agent_name, work_item_id, profile, round, pass_id, pass_kind, source_module/module_id, language, shard_type, files, coverage_status, findings_count.
     coverage_status: complete, partial, blocked, shallow, expansion_needed
 
 18. coverage-query - Query coverage ledger records.
     Required: db_path
-    Optional: agent_name, work_item_id, source_module, module_id, language, profile, round, shard_type, coverage_status, limit
+    Optional: agent_name, work_item_id, source_module, module_id, language, profile, round, pass_id, pass_kind, shard_type, coverage_status, limit
 
 19. coverage-stats - Get coverage ledger status counts.
     Required: db_path
-    Optional: agent_name, source_module, module_id, language, profile, round, shard_type, coverage_status
+    Optional: agent_name, source_module, module_id, language, profile, round, pass_id, pass_kind, shard_type, coverage_status
 
 Parameters:
 - db_path: Absolute path to the SQLite database file (e.g. {CONTEXT_DIR}/scan.db)
@@ -106,6 +106,8 @@ Parameters:
 - agent_name: Agent name for log command
 - profile: Scan profile (quick/standard/deep/paranoid)
 - round: Scan round number
+- pass_id: Independent scan pass number
+- pass_kind: Independent pass kind (primary/sink_to_source/negative_review/cross_module/disagreement_review)
 - work_item_id: Work item ID for coverage records
 - coverage_status: Coverage status for coverage-query
 - module_name: Module name for log command

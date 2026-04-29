@@ -9,7 +9,7 @@ For project_model.json, call_graph.json, and scan_profile.json, the tool also pe
 - project_model entry points reference known files/modules
 - call_graph edges and data flow paths reference existing nodes
 - deprecated call_graph.functions is rejected in favor of nodes/edges/data_flows
-- scan_profile contains a supported profile name, max_rounds, source, and profile_config booleans/numbers
+- scan_profile contains a supported profile name, max_rounds, repeat pass settings, source, and profile_config booleans/numbers
 
 Parameters:
 - path: Absolute path to the JSON file to validate

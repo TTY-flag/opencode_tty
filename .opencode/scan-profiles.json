@@ -3,7 +3,10 @@
   "profiles": {
     "quick": {
       "max_rounds": 1,
+      "min_independent_passes": 1,
+      "high_risk_min_passes": 1,
       "max_expansions_per_module": 0,
+      "repeat_pass_kinds": ["primary"],
       "rescan_high_risk_empty_modules": false,
       "require_negative_evidence": false,
       "duplicate_high_risk_review": false,
@@ -11,7 +14,10 @@
     },
     "standard": {
       "max_rounds": 2,
+      "min_independent_passes": 1,
+      "high_risk_min_passes": 1,
       "max_expansions_per_module": 1,
+      "repeat_pass_kinds": ["primary", "sink_to_source"],
       "rescan_high_risk_empty_modules": true,
       "require_negative_evidence": true,
       "duplicate_high_risk_review": false,
@@ -19,7 +25,10 @@
     },
     "deep": {
       "max_rounds": 4,
+      "min_independent_passes": 2,
+      "high_risk_min_passes": 2,
       "max_expansions_per_module": 3,
+      "repeat_pass_kinds": ["primary", "sink_to_source", "negative_review", "cross_module"],
       "rescan_high_risk_empty_modules": true,
       "require_negative_evidence": true,
       "duplicate_high_risk_review": true,
@@ -27,7 +36,10 @@
     },
     "paranoid": {
       "max_rounds": 5,
+      "min_independent_passes": 2,
+      "high_risk_min_passes": 3,
       "max_expansions_per_module": 5,
+      "repeat_pass_kinds": ["primary", "sink_to_source", "negative_review", "cross_module", "disagreement_review"],
       "rescan_high_risk_empty_modules": true,
       "require_negative_evidence": true,
       "duplicate_high_risk_review": true,
@@ -37,7 +49,7 @@
   "rounds": {
     "1": "broad coverage: entrypoint, sink, and module sweep work items",
     "2": "low-coverage follow-up: expansion_needed, shallow, partial, unresolved call graph, missing source/sink evidence",
-    "3": "high-risk negative review: Critical/High modules with no findings must produce negative evidence or new expansion slices",
+    "3": "independent repeat pass: high-risk modules are rescanned from a different viewpoint even if coverage is complete",
     "4": "cross-module deepening: data/security flows across module and language boundaries",
     "5": "consistency review: duplicate high-risk review and disagreement checks"
   }

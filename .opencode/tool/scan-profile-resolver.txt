@@ -20,6 +20,6 @@ Optional:
 
 Output:
 - Writes normalized JSON to {context_dir}/scan_profile.json
-- Returns profile name, max_rounds, source path, output path, and any warnings
+- Returns profile name, max_rounds, repeat pass settings, source path, output path, and any warnings
 
 The normalized JSON should be passed to scanner coordinators instead of asking them to find scan-profiles.json.

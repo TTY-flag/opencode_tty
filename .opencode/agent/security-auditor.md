@@ -188,7 +188,7 @@ vuln-db command=work-requeue db_path={DB_PATH} agent_name=security-auditor
 为每个任务生成稳定 ID，建议格式：
 
 ```
-sec-r{round}-{language}-{module_slug}-{shard_type}-{sequence}
+sec-r{round}-p{pass_id}-{pass_kind}-{language}-{module_slug}-{shard_type}-{sequence}
 ```
 
 然后调用：
@@ -200,6 +200,8 @@ vuln-db command=work-add db_path={DB_PATH} work_items='[...]'
 每个 work item 必须包含：
 - `profile`: 当前 `SCAN_PROFILE`
 - `round`: 当前轮次，从 1 开始
+- `pass_id`: 当前独立扫描 pass，从 1 开始
+- `pass_kind`: `primary` / `sink_to_source` / `negative_review` / `cross_module` / `disagreement_review`
 - `module_id`: `project_model.json` 中的模块稳定 ID
 - `context.node_ids` / `context.edge_ids` / `context.data_flow_ids`: 与该切片相关的调用图 ID
 
@@ -247,6 +249,7 @@ vuln-db command=work-claim db_path={DB_PATH} agent_name=security-auditor limit=1
 ## Work Item
 - ID: [work_item.id]
 - 类型: [entrypoint_slice / sink_slice / module_sweep / cross_module_slice]
+- round/pass: [work_item.round] / [work_item.pass_id] [work_item.pass_kind]
 - 优先级: [priority]
 - module_id: [work_item.module_id]
 - focus: [work_item.focus]
@@ -267,12 +270,13 @@ vuln-db command=work-claim db_path={DB_PATH} agent_name=security-auditor limit=1
 
 ## 审计要求
 1. 只审计当前 work item 规定的文件和 focus，不扩大到整个模块
-2. 标记可能涉及跨模块的安全逻辑（凭证传递等）
-3. **使用 `vuln-db insert` 将候选漏洞写入数据库**
-4. 返回文本必须包含覆盖账本摘要（见下文），协调者据此调用 `coverage-add`
-5. 完成后由协调者调用 `work-complete`，失败则调用 `work-fail`
-6. 返回文本只包含：审计统计、覆盖账本摘要、跨模块安全提示（不含完整漏洞详情）
-7. **遵守职责边界**：不重复报告普通 source→sink 数据流漏洞；每条候选必须设置 `analysis_kind`
+2. 按 `pass_kind` 调整视角：`primary` 正向查安全主题，`sink_to_source` 从敏感操作/权限点反推入口和 guard，`negative_review` 专门证明高风险空结果，`cross_module` 聚焦跨模块权限/凭证状态，`disagreement_review` 复查不同 pass 的冲突
+3. 标记可能涉及跨模块的安全逻辑（凭证传递等）
+4. **使用 `vuln-db insert` 将候选漏洞写入数据库**
+5. 返回文本必须包含覆盖账本摘要（见下文），协调者据此调用 `coverage-add`
+6. 完成后由协调者调用 `work-complete`，失败则调用 `work-fail`
+7. 返回文本只包含：审计统计、覆盖账本摘要、跨模块安全提示（不含完整漏洞详情）
+8. **遵守职责边界**：不重复报告普通 source→sink 数据流漏洞；每条候选必须设置 `analysis_kind`
 ```
 
 #### 覆盖账本回写（必须）
@@ -286,6 +290,8 @@ vuln-db command=coverage-add db_path={DB_PATH} coverage_items='[
     "work_item_id": "{WORK_ITEM_ID}",
     "profile": "{SCAN_PROFILE}",
     "round": 1,
+    "pass_id": 1,
+    "pass_kind": "primary",
     "source_module": "...",
     "module_id": "...",
     "language": "java",
@@ -308,6 +314,8 @@ vuln-db command=coverage-add db_path={DB_PATH} coverage_items='[
 ```
 
 当 worker 返回 `EXPANSION_NEEDED`、证据不足、只看了很少文件、没有列出认证/授权/配置检查项，或高风险任务 0 finding 且没有 `negative_evidence` 时，`coverage_status` 必须写为 `expansion_needed` / `shallow` / `partial`，不能写成 `complete`。
+
+同一高风险模块在 `deep` 下至少需要 2 个不同 `pass_kind` 的成功 coverage 记录；在 `paranoid` 下至少需要 3 个。不要因为第一遍 `primary` pass 为 `complete` 就跳过 `sink_to_source` 或 `negative_review`。
 
 Worker 成功后：
 
@@ -350,6 +358,19 @@ vuln-db command=coverage-query db_path={DB_PATH} agent_name=security-auditor cov
 | `call_graph.unresolved[]` 涉及当前模块 | 生成框架注入、反射、装饰器、Lua table dispatch 补查 |
 | worker 提供 `[CREDENTIAL_FLOW]` 或权限状态跨模块线索 | 生成 `cross_module_slice` |
 
+#### 随机性复扫 Pass Loop
+
+覆盖补扫之外，还必须根据 `profile_config.min_independent_passes`、`high_risk_min_passes` 和 `repeat_pass_kinds` 生成独立复扫任务：
+
+| 条件 | 下一轮任务 |
+| ---- | ---------- |
+| 高风险模块只有 `primary` pass | 生成 `sink_to_source` pass，从权限点、敏感配置或 credential use 反推入口 |
+| 高风险模块 0 findings 且有 `negative_evidence` | 仍生成 `negative_review` pass 复核反证 |
+| 不同 pass 对认证/授权/配置结论冲突 | 生成 `disagreement_review` pass |
+| 跨模块权限状态、session、token 或 credential flow 参与路径 | 生成 `cross_module` pass |
+
+重复 pass 的 work item 必须复用同一个 `module_id`、入口点、安全主题和 call_graph ID，并改变 `pass_id/pass_kind`。候选漏洞取并集，交给 verification/dedup 合并。
+
 如果已经达到 `MAX_ROUNDS`，允许停止补扫，但必须在返回给 Orchestrator 的摘要中列出未解决的覆盖缺口和原因。
 
 ### 阶段 5: 跨模块安全分析
@@ -374,7 +395,7 @@ vuln-db command=coverage-stats db_path={DB_PATH} agent_name=security-auditor
 vuln-db command=stats db_path={DB_PATH} phase=candidate
 ```
 
-检查返回的统计信息，确认 work item 均为 `success/skipped`，覆盖账本中没有未处理的 `expansion_needed/shallow/partial`（或已达到 `MAX_ROUNDS` 并记录原因），候选漏洞数量与 worker 报告一致。允许某些任务 `success` 且 finding_count=0，但高风险任务必须有 `negative_evidence`。
+检查返回的统计信息，确认 work item 均为 `success/skipped`，覆盖账本中没有未处理的 `expansion_needed/shallow/partial`（或已达到 `MAX_ROUNDS` 并记录原因），高风险模块满足重复 pass 门槛，候选漏洞数量与 worker 报告一致。允许某些任务 `success` 且 finding_count=0，但高风险任务必须有 `negative_evidence`。
 
 同时调用 `vuln-db log` 记录完成状态：
 
