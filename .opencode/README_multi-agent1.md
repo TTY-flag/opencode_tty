@@ -311,20 +311,20 @@ DataFlow Scanner、Security Auditor 和 Verification 都采用协调者-工作�
 
 | Skill                 | 路径                                     | 用途                                              | 引用者                                                        |
 | --------------------- | ---------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------- |
-| c-cpp-taint-tracking  | `.opencode/skill/c-cpp-taint-tracking/`  | C/C++ 污点源/汇定义                               | dataflow-module-scanner                                       |
-| python-taint-tracking | `.opencode/skill/python-taint-tracking/` | Python 污点源/汇定义（覆盖 Flask/Django/FastAPI） | python-dataflow-module-scanner                                |
-| pre-validation-rules  | `.opencode/skill/pre-validation-rules/`  | 误报过滤规则（支持 C/C++ 和 Python）              | 所有 Scanner                                                  |
-| confidence-scoring    | `.opencode/skill/confidence-scoring/`    | 置信度评分方法（含一票否决）                      | verification-worker                                           |
-| cross-file-analysis   | `.opencode/skill/cross-file-analysis/`   | 跨文件追踪方法（支持 C/C++ 和 Python）            | architecture, 所有 Scanner, verification, verification-worker |
-| agent-communication   | `.opencode/skill/agent-communication/`   | 路径约定、JSON Schema                             | 所有 Agent                                                    |
-| vulnerability-db      | `.opencode/skill/vulnerability-db/`      | SQLite 数据库 Schema、vuln-db 工具 API            | 所有 Scanner, verification, details-analyzer, reporter        |
-| bun-file-io           | `.opencode/skill/bun-file-io/`           | Bun 文件 I/O 最佳实践                             | 所有需要文件操作的 Agent                                      |
+| c-cpp-taint-tracking  | `.opencode/skills/c-cpp-taint-tracking/`  | C/C++ 污点源/汇定义                               | dataflow-module-scanner                                       |
+| python-taint-tracking | `.opencode/skills/python-taint-tracking/` | Python 污点源/汇定义（覆盖 Flask/Django/FastAPI） | python-dataflow-module-scanner                                |
+| pre-validation-rules  | `.opencode/skills/pre-validation-rules/`  | 误报过滤规则（支持 C/C++ 和 Python）              | 所有 Scanner                                                  |
+| confidence-scoring    | `.opencode/skills/confidence-scoring/`    | 置信度评分方法（含一票否决）                      | verification-worker                                           |
+| cross-file-analysis   | `.opencode/skills/cross-file-analysis/`   | 跨文件追踪方法（支持 C/C++ 和 Python）            | architecture, 所有 Scanner, verification, verification-worker |
+| agent-communication   | `.opencode/skills/agent-communication/`   | 路径约定、JSON Schema                             | 所有 Agent                                                    |
+| vulnerability-db      | `.opencode/skills/vulnerability-db/`      | SQLite 数据库 Schema、vuln-db 工具 API            | 所有 Scanner, verification, details-analyzer, reporter        |
+| bun-file-io           | `.opencode/skills/bun-file-io/`           | Bun 文件 I/O 最佳实践                             | 所有需要文件操作的 Agent                                      |
 
 ### 扩展新语言
 
 要支持新语言（如 Java），只需：
 
-1. 创建 `.opencode/skill/java-taint-tracking/SKILL.md`（定义 Java 的 Source/Sink）
+1. 创建 `.opencode/skills/java-taint-tracking/SKILL.md`（定义 Java 的 Source/Sink）
 2. 在 `pre-validation-rules` 中添加语言特有过滤条件
 3. 创建对应的模块扫描 Agent（如 `java-dataflow-module-scanner.md`）
 4. 修改 Scanner 协调者根据语言类型调度对应的 Worker
@@ -333,12 +333,12 @@ DataFlow Scanner、Security Auditor 和 Verification 都采用协调者-工作�
 
 | Tool             | 路径                                 | 用途                                                                         | 状态                              |
 | ---------------- | ------------------------------------ | ---------------------------------------------------------------------------- | --------------------------------- |
-| vuln-db          | `.opencode/tool/vuln-db.ts`          | SQLite 漏洞数据库 CRUD 操作（init/insert/query/update/dedup/stats/log）      | ✅ 使用中                         |
-| report-generator | `.opencode/tool/report-generator.ts` | 从 SQLite 程序化生成完整 Markdown 漏洞报告                                   | ✅ 使用中                         |
-| merge-json       | `.opencode/tool/merge-json.ts`       | 合并多个 JSON 文件的数组字段                                                 | ⚠️ 已弃用（漏洞数据改用 vuln-db） |
-| validate-json    | `.opencode/tool/validate-json.ts`    | JSON 文件语法校验（用于 project_model.json、call_graph.json、scan_log.json） | ✅ 使用中                         |
-| github-triage    | `.opencode/tool/github-triage.ts`    | GitHub Issue 自动分配和标签管理                                              | ❌ 禁用（项目开发辅助）           |
-| github-pr-search | `.opencode/tool/github-pr-search.ts` | GitHub PR 搜索                                                               | ❌ 禁用（项目开发辅助）           |
+| vuln-db          | `.opencode/tools/vuln-db.ts`          | SQLite 漏洞数据库 CRUD 操作（init/insert/query/update/dedup/stats/log）      | ✅ 使用中                         |
+| report-generator | `.opencode/tools/report-generator.ts` | 从 SQLite 程序化生成完整 Markdown 漏洞报告                                   | ✅ 使用中                         |
+| merge-json       | `.opencode/tools/merge-json.ts`       | 合并多个 JSON 文件的数组字段                                                 | ⚠️ 已弃用（漏洞数据改用 vuln-db） |
+| validate-json    | `.opencode/tools/validate-json.ts`    | JSON 文件语法校验（用于 project_model.json、call_graph.json、scan_log.json） | ✅ 使用中                         |
+| github-triage    | `.opencode/tools/github-triage.ts`    | GitHub Issue 自动分配和标签管理                                              | ❌ 禁用（项目开发辅助）           |
+| github-pr-search | `.opencode/tools/github-pr-search.ts` | GitHub PR 搜索                                                               | ❌ 禁用（项目开发辅助）           |
 
 > **注**: `github-triage` 和 `github-pr-search` 是本项目开发辅助工具，与漏洞扫描无关，在 `opencode.jsonc` 中已禁用。
 
@@ -371,11 +371,11 @@ SQLite 漏洞数据库工具，替代之前分散的 JSON 中间文件。通过 
 
 | Command     | 路径                              | 用途                            |
 | ----------- | --------------------------------- | ------------------------------- |
-| /commit     | `.opencode/command/commit.md`     | Git commit + push（带规范前缀） |
-| /issues     | `.opencode/command/issues.md`     | GitHub issues 查找              |
-| /rmslop     | `.opencode/command/rmslop.md`     | 移除 AI 生成的代码风格问题      |
-| /spellcheck | `.opencode/command/spellcheck.md` | Markdown 文件拼写检查           |
-| /ai-deps    | `.opencode/command/ai-deps.md`    | AI SDK 依赖版本升级             |
+| /commit     | `.opencode/commands/commit.md`     | Git commit + push（带规范前缀） |
+| /issues     | `.opencode/commands/issues.md`     | GitHub issues 查找              |
+| /rmslop     | `.opencode/commands/rmslop.md`     | 移除 AI 生成的代码风格问题      |
+| /spellcheck | `.opencode/commands/spellcheck.md` | Markdown 文件拼写检查           |
+| /ai-deps    | `.opencode/commands/ai-deps.md`    | AI SDK 依赖版本升级             |
 
 > **注**: 这些命令用于本 harness 工程的开发维护，扫描其他项目时不需关注。
 
@@ -524,7 +524,7 @@ your-project/
 ├── threat.md（可选）            # 分析人员定义的攻击面约束，约束 AI 识别范围
 │                                # 可手动编写或由 @threat-analyst 交互式生成
 ├── .opencode/
-│   ├── agent/                      # Agent 定义（14 个）
+│   ├── agents/                     # Agent 定义（14 个）
 │   │   ├── orchestrator.md         # 扫描协调者（primary）
 │   │   ├── threat-analyst.md       # 交互式威胁分析（primary）
 │   │   ├── architecture.md         # 架构分析、语言检测
@@ -539,7 +539,7 @@ your-project/
 │   │   ├── details-analyzer.md     # 深度利用分析协调者
 │   │   ├── details-worker.md       # 单个漏洞深度利用分析子Agent
 │   │   └── reporter.md             # 报告生成
-│   ├── skill/                      # Skill 定义（8 个）
+│   ├── skills/                     # Skill 定义（8 个）
 │   │   ├── agent-communication/    # Agent 间通信规范
 │   │   ├── c-cpp-taint-tracking/   # C/C++ 污点追踪规则
 │   │   ├── python-taint-tracking/  # Python 污点追踪规则（Flask/Django/FastAPI）
@@ -548,13 +548,13 @@ your-project/
 │   │   ├── pre-validation-rules/   # 预验证/误报过滤（C/C++/Python）
 │   │   ├── vulnerability-db/       # SQLite 漏洞数据库 Schema 和 API
 │   │   └── bun-file-io/            # Bun 文件 I/O 最佳实践
-│   ├── command/                    # 项目开发命令（5 个）
+│   ├── commands/                   # 项目开发命令（5 个）
 │   │   ├── commit.md               # Git commit + push
 │   │   ├── issues.md               # GitHub issues 查找
 │   │   ├── rmslop.md               # 移除 AI 代码风格问题
 │   │   ├── spellcheck.md           # Markdown 拼写检查
 │   │   └── ai-deps.md              # AI SDK 依赖升级
-│   └── tool/                       # 自定义工具（6 个）
+│   └── tools/                      # 自定义工具（6 个）
 │       ├── vuln-db.ts              # SQLite 漏洞数据库 CRUD 工具
 │       ├── vuln-db.txt             # vuln-db 工具描述
 │       ├── report-generator.ts     # 程序化报告生成工具
