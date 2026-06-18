@@ -186,4 +186,4 @@ public:
 
 ## 扩展指南
 
-为新语言添加污点追踪规则时，创建对应的 Skill 文件（如 `.opencode/skill/java-taint-tracking/SKILL.md`），保持相同的表格结构，替换语言特有的函数和 API。
+为新语言添加污点追踪规则时，创建对应的 Skill 文件（如 `.opencode/skills/java-taint-tracking/SKILL.md`），保持相同的表格结构，替换语言特有的函数和 API。

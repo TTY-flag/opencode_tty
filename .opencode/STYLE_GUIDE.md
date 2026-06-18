@@ -36,6 +36,6 @@ For each candidate, prefer filling:
 
 ## Language Packs
 
-Language-specific knowledge lives in `.opencode/language/*.json` and `.opencode/skill/*-taint-tracking/SKILL.md`.
+Language-specific knowledge lives in `.opencode/language/*.json` and `.opencode/skills/*-taint-tracking/SKILL.md`.
 
 Do not add a new dedicated worker for every language unless the generic language worker cannot express the required behavior.

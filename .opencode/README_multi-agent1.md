@@ -149,9 +149,9 @@ scan-results/
 ```text
 your-target-project/
 ├── .opencode/
-│   ├── agent/
-│   ├── skill/
-│   ├── tool/
+│   ├── agents/
+│   ├── skills/
+│   ├── tools/
 │   ├── language/
 │   ├── scan-profiles.json
 │   └── opencode.jsonc
@@ -299,11 +299,11 @@ Architecture agent 会识别模块语言，并把语言写入 `project_model.jso
 
 | 语言 | 数据流 worker | 安全审计 worker | 规则来源 |
 | ---- | ------------- | --------------- | -------- |
-| C/C++ | `dataflow-module-scanner` | `security-module-scanner` | `language/c-cpp.json`、`skill/c-cpp-taint-tracking` |
-| Python | `python-dataflow-module-scanner` | `python-security-module-scanner` | `language/python.json`、`skill/python-taint-tracking` |
-| Go | `language-module-scanner` | `language-security-module-scanner` | `language/go.json`、`skill/go-taint-tracking` |
-| Lua | `language-module-scanner` | `language-security-module-scanner` | `language/lua.json`、`skill/lua-taint-tracking` |
-| Java | `language-module-scanner` | `language-security-module-scanner` | `language/java.json`、`skill/java-taint-tracking` |
+| C/C++ | `dataflow-module-scanner` | `security-module-scanner` | `language/c-cpp.json`、`skills/c-cpp-taint-tracking` |
+| Python | `python-dataflow-module-scanner` | `python-security-module-scanner` | `language/python.json`、`skills/python-taint-tracking` |
+| Go | `language-module-scanner` | `language-security-module-scanner` | `language/go.json`、`skills/go-taint-tracking` |
+| Lua | `language-module-scanner` | `language-security-module-scanner` | `language/lua.json`、`skills/lua-taint-tracking` |
+| Java | `language-module-scanner` | `language-security-module-scanner` | `language/java.json`、`skills/java-taint-tracking` |
 
 混合模块会先按文件语言、入口点和调用关系拆成多个 work item，不应把 `mixed` 直接交给 worker 扫整个模块。
 
@@ -450,7 +450,7 @@ vuln-db command=work-stats db_path={SCAN_OUTPUT}/.context/scan.db agent_name=dat
 
 ```text
 .opencode/
-├── agent/
+├── agents/
 │   ├── orchestrator.md
 │   ├── architecture.md
 │   ├── dataflow-scanner.md
@@ -465,13 +465,13 @@ vuln-db command=work-stats db_path={SCAN_OUTPUT}/.context/scan.db agent_name=dat
 │   ├── go.json
 │   ├── lua.json
 │   └── java.json
-├── skill/
+├── skills/
 │   ├── agent-communication/
 │   ├── vulnerability-db/
 │   ├── cross-file-analysis/
 │   ├── pre-validation-rules/
 │   └── *-taint-tracking/
-├── tool/
+├── tools/
 │   ├── vuln-db.ts
 │   ├── report-generator.ts
 │   ├── scan-profile-resolver.ts
@@ -504,7 +504,7 @@ vuln-db command=work-stats db_path={SCAN_OUTPUT}/.context/scan.db agent_name=dat
 建议按这个顺序：
 
 1. 新增 `.opencode/language/{new_language}.json`。
-2. 新增 `skill/{new_language}-taint-tracking/SKILL.md`。
+2. 新增 `skills/{new_language}-taint-tracking/SKILL.md`。
 3. 在 architecture 中加入语言检测和模块语言标注。
 4. 在 dataflow/security coordinator 中加入分发规则。
 5. 复用 `language-module-scanner` / `language-security-module-scanner`，除非该语言需要专用 worker。
